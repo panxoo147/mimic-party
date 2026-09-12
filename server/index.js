@@ -63,7 +63,7 @@ app.use('/media/sounds', express.static(soundLibrary.LOCAL_SOUNDS_DIR));
 app.use('/media/cache', express.static(soundLibrary.CACHE_SOUNDS_DIR));
 app.use('/media/takes', express.static(UPLOADS_TAKES_DIR));
 
-app.get('/', (req, res) => res.redirect('/join'));
+app.get('/', (req, res) => res.sendFile(path.join(ROOT, 'public', 'index.html')));
 app.get('/join', (req, res) => res.sendFile(path.join(ROOT, 'public', 'play.html')));
 app.get('/host', (req, res) => res.sendFile(path.join(ROOT, 'public', 'host.html')));
 

@@ -5,7 +5,7 @@
 
 <div class="container">
   <div class="row between">
-    <h1 style="font-size:1.4rem;">🎤 Mimic Party</h1>
+    <h1 class="logo logo-player" style="font-size:1.15rem;"><span class="emoji">🎤</span> Mimic Party</h1>
     <span id="myScoreBadge" class="badge hidden">คะแนน <b id="myScore">0</b></span>
   </div>
 
@@ -50,7 +50,8 @@
         <div class="pulse-ring listening">🔊</div>
         <h2>ฟังให้ดี...</h2>
         <p class="muted">เดี๋ยวจะเปิดเสียงให้ฟัง แล้วให้เลียนแบบทันที</p>
-        <div id="pListenWaveGraph"></div>
+        <!-- ซ่อนกราฟคลื่นเสียงตอนฟังไว้ก่อนตามที่ผู้ใช้ขอ (ยังไม่ลบโค้ด/องค์ประกอบ เผื่อเอากลับมาใช้ทีหลัง แค่เอา class="hidden" ออกก็พอ) -->
+        <div id="pListenWaveGraph" class="hidden"></div>
       </div>
       <div id="pStageRecord" class="hidden">
         <div class="pulse-ring">🎙️</div>
@@ -64,7 +65,7 @@
         <p class="muted">รอเพื่อนคนอื่นเลียนแบบให้เสร็จ...</p>
       </div>
       <div id="pStageObserve" class="hidden">
-        <div class="pulse-ring listening">👀</div>
+        <div class="pulse-ring observing">👀</div>
         <h2>โหมดดูอย่างเดียว</h2>
         <p class="muted">ฟังเสียงเฉยๆ รอดูผู้เล่นคนอื่นเลียนแบบได้เลย</p>
       </div>

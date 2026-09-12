@@ -142,7 +142,7 @@
     const publicUrlInputEl = $('publicUrlInput');
     if (publicUrlSaved && publicUrlInputEl) publicUrlInputEl.value = publicUrlSaved;
     const openSaved = localStorage.getItem('mp_publicurl_open');
-    setPublicUrlSectionOpen(openSaved === '1' || (openSaved === null && !!publicUrlSaved));
+    // setPublicUrlSectionOpen(openSaved === '1' || (openSaved === null && !!publicUrlSaved));
 
     if (saved && saved.code && saved.hostToken) {
       socket.emit('host:rejoin_room', { code: saved.code, hostToken: saved.hostToken }, (res) => {

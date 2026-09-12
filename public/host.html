@@ -5,7 +5,7 @@
 
 <div id="tapGate" class="container center" style="justify-content:center;">
   <div class="card">
-    <h1>🎤 Mimic Party</h1>
+    <h1 class="logo"><span class="emoji">🎤</span> Mimic Party</h1>
     <p class="muted">แตะเพื่อเริ่มระบบเสียงของจอนี้</p>
     <button class="btn primary big" id="tapGateBtn">แตะเพื่อเริ่ม</button>
   </div>
@@ -14,7 +14,7 @@
 <div id="app" class="container hidden">
 
   <div class="row between">
-    <h1>🎤 Mimic Party</h1>
+    <h1 class="logo"><span class="emoji">🎤</span> Mimic Party</h1>
     <span id="roomBadge" class="badge hidden">ห้อง <b id="roomBadgeCode">----</b></span>
   </div>
 
@@ -30,7 +30,7 @@
         </div>
         <div class="small muted" style="margin-top:8px; word-break:break-all;">ลิงก์เข้าร่วม: <a id="joinLinkText" href="#" target="_blank"></a></div>
         <div class="col" style="margin-top:10px;">
-          <button type="button" class="btn ghost small" id="togglePublicUrlBtn" style="align-self:flex-start;">🌐 ลิงก์เล่นนอกบ้าน (ถ้าต้องการ)</button>
+          <!-- <button type="button" class="btn ghost small" id="togglePublicUrlBtn" style="align-self:flex-start;">🌐 ลิงก์เล่นนอกบ้าน (ถ้าต้องการ)</button> -->
           <div id="publicUrlSection" class="col hidden" style="margin-top:8px;">
             <label class="small muted">ลิงก์สำหรับเล่นนอกบ้าน (ใส่ URL จาก ngrok/cloudflared หรือโดเมนที่ deploy ไว้ แล้วกด "ใช้ลิงก์นี้")</label>
             <div class="row">
