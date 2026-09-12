@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const axios = require('axios');
-const { analyzeFile } = require('./audio');
+const { analyzeFile, ANALYSIS_VERSION } = require('./audio');
 
 const ROOT = path.join(__dirname, '..');
 const LOCAL_SOUNDS_DIR = path.join(ROOT, 'assets', 'sounds');
@@ -58,7 +58,8 @@ async function scanAndSync() {
       const filePath = path.join(dir, filename);
       const id = idFor(filePath);
       let entry = libraryMeta[id];
-      if (!entry || entry.mtimeMs !== fs.statSync(filePath).mtimeMs) {
+      const mtimeMs = fs.statSync(filePath).mtimeMs;
+      if (!entry || entry.mtimeMs !== mtimeMs || entry.analysisVersion !== ANALYSIS_VERSION) {
         try {
           const sig = await analyzeFile(filePath);
           entry = {
@@ -66,7 +67,8 @@ async function scanAndSync() {
             name: entry?.name || path.basename(filename, ext),
             source,
             relPath: path.relative(ROOT, filePath),
-            mtimeMs: fs.statSync(filePath).mtimeMs,
+            mtimeMs,
+            analysisVersion: ANALYSIS_VERSION,
             durationMs: sig.durationMs,
             envelope: sig.envelope,
             onsets: sig.onsets,
@@ -133,6 +135,7 @@ async function addLocalFile(originalName, buffer) {
     source: 'local',
     relPath: path.relative(ROOT, filePath),
     mtimeMs: fs.statSync(filePath).mtimeMs,
+    analysisVersion: ANALYSIS_VERSION,
     durationMs: sig.durationMs,
     envelope: sig.envelope,
     onsets: sig.onsets,
@@ -258,6 +261,7 @@ async function addFromMyInstants(url) {
     sourceUrl: pageUrl.toString(),
     relPath: path.relative(ROOT, filePath),
     mtimeMs: fs.statSync(filePath).mtimeMs,
+    analysisVersion: ANALYSIS_VERSION,
     durationMs: sig.durationMs,
     envelope: sig.envelope,
     onsets: sig.onsets,

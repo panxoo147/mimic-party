@@ -11,8 +11,11 @@
    *  - setGhost(envelopeArray|null)   วาดเงาแท่ง "ต้นฉบับ" ไว้ข้างหลัง (โปร่งแสง)
    *  - setLive(envelopeArray|null)    วาดแท่ง "ของจริง" ทับด้านหน้า (ใช้ตอนเฉลยผล)
    *  - reset()                        เคลียร์กราฟให้แบนราบ เตรียมอัดใหม่
-   *  - pushLive(value 0..1)           กราฟสไตล์ VU-meter สด: เติมแท่งถัดไปจากซ้ายไปขวาไปเรื่อยๆ ตามเวลาที่อัดไป (ใช้ตอนกำลังอัดเสียง)
-   *                                    ให้ตำแหน่งแท่งตรงกับสัดส่วนเวลาเดียวกับกราฟเงาต้นฉบับ (ซ้าย=เริ่มอัด ขวา=จบการอัด)
+   *  - advanceTo(ratio 0..1, value 0..1)  กราฟสไตล์ VU-meter สด ระหว่างอัดเสียง: เติมแท่งจากซ้ายไปขวาโดยอิง "สัดส่วนเวลาจริง
+   *                                    ที่ผ่านไปแล้ว" (ratio = เวลาที่ผ่านไป/เวลาอัดทั้งหมด) ไม่ใช่นับจำนวนครั้งที่ถูกเรียก
+   *                                    เพราะถ้านับจากจำนวนครั้ง เวลา setInterval โดนดีเลย์/throttle (เช่นเบราว์เซอร์หน่วงงานพื้นหลัง)
+   *                                    กราฟจะเติมไม่ทันเวลาอัดจริงจบไปแล้ว ทำให้ค้างไม่เต็มเส้นทั้งที่อัดเสร็จแล้ว
+   *                                    ฟังก์ชันนี้จะ "ไล่เติม" แท่งที่ยังไม่ถึงให้ทันตามสัดส่วนเวลาที่ควรจะเป็นเสมอทุกครั้งที่เรียก
    *  - highlightUpTo(ratio 0..1)      ไฮไลต์แท่งตามสัดส่วนเวลาที่เล่นไปแล้ว (ใช้ตอนฟังเสียงต้นฉบับ)
    */
   function createWaveGraph(container, opts = {}) {
@@ -60,14 +63,17 @@
       liveBars.forEach((b) => { b.style.height = '4%'; b.classList.add('pending'); });
     }
 
-    // สำหรับกราฟสด (ตอนอัดเสียง): เติมแท่งถัดไปจากซ้ายไปขวาทีละแท่งตามเวลาจริง (ไม่ใช่เลื่อนหน้าต่างแบบ VU-meter ทั่วไป)
-    // เพื่อให้ตำแหน่งแท่งซ้าย-ขวาตรงกับกราฟเงาต้นฉบับด้านหลังเป๊ะๆ เทียบกันได้ทันทีระหว่างอัด
+    // สำหรับกราฟสด (ตอนอัดเสียง): เติมแท่งถัดไปจากซ้ายไปขวาตามสัดส่วนเวลาจริงที่ผ่านไปแล้ว (ไม่ใช่นับจำนวนครั้งที่ถูกเรียก)
+    // เพื่อให้ตำแหน่งแท่งซ้าย-ขวาตรงกับกราฟเงาต้นฉบับด้านหลังเป๊ะๆ เทียบกันได้ทันทีระหว่างอัด และไม่ค้างไม่เต็มเส้นถ้า
+    // setInterval โดนดีเลย์/throttle ไปบ้าง (ดูรายละเอียดที่คอมเมนต์ด้านบน)
     let nextIndex = 0;
-    function pushLive(value) {
-      if (nextIndex >= barCount) return; // อัดครบตามความยาวกราฟแล้ว ไม่ต้องเติมต่อ
-      liveBars[nextIndex].style.height = (4 + clamp01(value) * 96) + '%';
-      liveBars[nextIndex].classList.remove('pending');
-      nextIndex++;
+    function advanceTo(ratio, value) {
+      const targetIndex = Math.min(barCount, Math.max(0, Math.round(clamp01(ratio) * barCount)));
+      while (nextIndex < targetIndex) {
+        liveBars[nextIndex].style.height = (4 + clamp01(value) * 96) + '%';
+        liveBars[nextIndex].classList.remove('pending');
+        nextIndex++;
+      }
     }
     function resetLiveValues() {
       nextIndex = 0;
@@ -83,7 +89,7 @@
 
     reset();
 
-    return { setGhost, setLive, reset: resetLiveValues, pushLive, highlightUpTo };
+    return { setGhost, setLive, reset: resetLiveValues, advanceTo, highlightUpTo };
   }
 
   global.MimicWaveGraph = { create: createWaveGraph, BAR_COUNT };

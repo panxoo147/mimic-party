@@ -12,9 +12,12 @@
 const { spawn } = require('child_process');
 const ffmpegPath = require('ffmpeg-static');
 
-const SAMPLE_RATE = 8000; // ลดอัตราสุ่มตัวอย่างให้เบา พอสำหรับวิเคราะห์จังหวะ/รูปทรงเสียง/ระดับเสียง
+// เพิ่มจาก 8000 → 16000Hz และลด FRAME_MS ลง เพื่อความแม่นยำที่สูงขึ้น:
+// - sample rate สูงขึ้น ทำให้ประมาณระดับเสียง (pitch) ได้ละเอียดขึ้น (ช่วงห่างความถี่ต่อ 1 lag แคบลงครึ่งหนึ่ง)
+// - เฟรมสั้นลง ทำให้ envelope มีความละเอียดตามเวลาสูงขึ้นก่อนถูก resample ลงเหลือ 60 จุด (จับจังหวะสั้นๆ ได้แม่นขึ้น)
+const SAMPLE_RATE = 16000; // ยังคงเบาพอสำหรับคลิปสั้นๆ ของเกมนี้ แต่แม่นยำกว่าเดิมมาก
 const ENVELOPE_POINTS = 60; // จำนวนจุดที่ resample เส้นต่างๆ ให้เท่ากันเสมอ
-const FRAME_MS = 30; // ความยาวเฟรมสำหรับ RMS envelope
+const FRAME_MS = 20; // ความยาวเฟรมสำหรับ RMS envelope (เดิม 30ms)
 const PITCH_MIN_HZ = 70; // ช่วงความถี่เสียงพูดของมนุษย์ทั่วไป (รวมเสียงทุ้ม)
 const PITCH_MAX_HZ = 500; // ถึงเสียงแหลม/เสียงเด็ก/เสียงแกล้งสูง
 const PITCH_MIN_LAG = Math.round(SAMPLE_RATE / PITCH_MAX_HZ);
@@ -81,6 +84,12 @@ function rmsEnvelope(samples, frameSize) {
 
 /**
  * ประมาณระดับเสียง (pitch) ต่อเฟรม ด้วยวิธี autocorrelation แบบ normalized ต่อกรอบเวลาเดียวกับ rmsEnvelope
+ * ปรับความแม่นยำเพิ่มจากเดิม 2 จุด:
+ *  1) แก้ปัญหา "octave error" ที่พบบ่อยในวิธี autocorrelation — บางทีคาบเสียง 2 เท่าของคาบจริง (เสียงเพี้ยนต่ำลง 1 ออกเทฟ)
+ *     ก็ correlation สูงพอๆ กับคาบจริง ทำให้เลือกผิด จึงเช็คว่า lag ที่สั้นกว่าครึ่งหนึ่ง (ความถี่สูงเป็น 2 เท่า)
+ *     มี correlation ใกล้เคียงกันไหม ถ้าใช่ให้เลือกอันที่สั้นกว่า (มักเป็นคาบจริงมากกว่า)
+ *  2) sub-sample interpolation (parabolic) รอบจุดที่ดีที่สุด เพราะปกติ lag เป็นจำนวนเต็มตัวอย่าง (sample)
+ *     ทำให้ความละเอียดของความถี่หยาบเป็นขั้นๆ โดยเฉพาะโน้ตสูงๆ การ interpolate ช่วยให้ได้ค่าความถี่ที่แม่นยำกว่าขั้นจำนวนเต็ม
  * คืนค่า { freq: Float32Array, confidence: Float32Array } ความยาวเท่ากับจำนวนเฟรมของ rmsEnvelope
  */
 function pitchPerFrame(samples, frameSize, frameCount) {
@@ -88,6 +97,8 @@ function pitchPerFrame(samples, frameSize, frameCount) {
   const confidence = new Float32Array(frameCount);
   // ใช้หน้าต่างวิเคราะห์ที่กว้างกว่าเฟรมเล็กน้อย (ครอบคลุมรอบคลื่นของเสียงทุ้มสุดที่รองรับได้)
   const halfWindow = Math.max(frameSize, Math.round(PITCH_MAX_LAG * 1.3));
+  const lagCount = PITCH_MAX_LAG - PITCH_MIN_LAG + 1;
+  const corrByLag = new Float32Array(lagCount); // ไว้ใช้ดูเพื่อนบ้านตอนแก้ octave error / interpolation
 
   for (let i = 0; i < frameCount; i++) {
     const center = i * frameSize + Math.floor(frameSize / 2);
@@ -100,6 +111,7 @@ function pitchPerFrame(samples, frameSize, frameCount) {
     for (let j = start; j < end; j++) mean += samples[j];
     mean /= n;
 
+    corrByLag.fill(0);
     let bestLag = -1;
     let bestCorr = 0;
     for (let lag = PITCH_MIN_LAG; lag <= PITCH_MAX_LAG && lag < n; lag++) {
@@ -114,10 +126,37 @@ function pitchPerFrame(samples, frameSize, frameCount) {
       }
       const denom = Math.sqrt(denA * denB);
       const corr = denom > 1e-9 ? num / denom : 0;
+      corrByLag[lag - PITCH_MIN_LAG] = corr;
       if (corr > bestCorr) { bestCorr = corr; bestLag = lag; }
     }
+
     if (bestLag > 0 && bestCorr > 0) {
-      freq[i] = SAMPLE_RATE / bestLag;
+      // (1) แก้ octave error: ถ้า lag สั้นกว่าครึ่งหนึ่ง (โน้ตสูงเป็น 2 เท่า) ก็ correlation ใกล้เคียงกันมาก
+      // ให้เชื่อ lag สั้นกว่าแทน เพราะมักเป็นคาบเสียงจริง ไม่ใช่ subharmonic ที่ autocorrelation หลอกได้ง่าย
+      const halfLag = Math.round(bestLag / 2);
+      if (halfLag >= PITCH_MIN_LAG && halfLag <= PITCH_MAX_LAG) {
+        const halfCorr = corrByLag[halfLag - PITCH_MIN_LAG];
+        if (halfCorr >= bestCorr * 0.9) {
+          bestLag = halfLag;
+          bestCorr = halfCorr;
+        }
+      }
+
+      // (2) sub-sample parabolic interpolation รอบ bestLag เพื่อความละเอียดของความถี่เกินกว่าขั้นจำนวนเต็มตัวอย่าง
+      let refinedLag = bestLag;
+      const idx = bestLag - PITCH_MIN_LAG;
+      if (idx > 0 && idx < lagCount - 1) {
+        const y0 = corrByLag[idx - 1];
+        const y1 = corrByLag[idx];
+        const y2 = corrByLag[idx + 1];
+        const denom = y0 - 2 * y1 + y2;
+        if (Math.abs(denom) > 1e-9) {
+          const delta = 0.5 * (y0 - y2) / denom;
+          if (delta > -1 && delta < 1) refinedLag = bestLag + delta; // กันค่าที่หลุดกรอบผิดปกติ
+        }
+      }
+
+      freq[i] = SAMPLE_RATE / refinedLag;
       confidence[i] = Math.max(0, Math.min(1, bestCorr));
     }
   }
@@ -366,9 +405,15 @@ function scoreAgainstReference(referenceSig, mimicSig) {
   };
 }
 
+// เพิ่มเลขนี้ทุกครั้งที่แก้อัลกอริทึมวิเคราะห์เสียง (sample rate, frame size, วิธีหา pitch ฯลฯ)
+// เพื่อให้ไฟล์เสียงที่แคช envelope/pitch ไว้แล้วใน data/library.json (จาก analyzeFile เวอร์ชันเก่า)
+// ถูกบังคับวิเคราะห์ใหม่โดยอัตโนมัติตอนรีเฟรชคลังเสียง แทนที่จะค้างข้อมูลที่แม่นยำน้อยกว่าไว้เงียบๆ
+const ANALYSIS_VERSION = 2;
+
 module.exports = {
   analyzeFile,
   scoreAgainstReference,
   ENVELOPE_POINTS,
   SILENCE_RAW_RMS_THRESHOLD,
+  ANALYSIS_VERSION,
 };

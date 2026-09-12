@@ -10,37 +10,21 @@
   let currentRecorder = null;
   let currentReferenceEnvelope = null;
 
-  // กราฟพลังเสียง 3 จุด: ตอนฟัง / ตอนอัด (มีเงาต้นฉบับให้ไล่ตาม) / ตอนเฉลยเทียบกัน
-  const pListenWave = MimicWaveGraph.create($('pListenWaveGraph'));
-  const pRecordWave = MimicWaveGraph.create($('pRecordWaveGraph'));
-  const pRevealWave = MimicWaveGraph.create($('revealWaveGraph'));
+  // เสียงที่กำลังเล่นอยู่ตอนนี้ (เสียงต้นฉบับ/เสียงตอนเฉลยผล) — เก็บ reference เดียวไว้กลาง เพื่อหยุดของเก่า
+  // ก่อนเล่นของใหม่เสมอ กันเสียงซ้อนกัน (เช่น round:sound ยิงซ้ำ หรือ reveal_take รอบถัดไปมาเร็วกว่าเสียงก่อนหน้าจะเล่นจบ)
+  let activeAudio = null;
+  function stopActiveAudio() {
+    if (activeAudio) {
+      try { activeAudio.pause(); } catch { /* เพิกเฉย */ }
+      try { activeAudio.src = ''; } catch { /* เพิกเฉย */ }
+      activeAudio = null;
+    }
+  }
 
-  // สำหรับวัดระดับเสียงไมค์แบบสดๆ ระหว่างอัด (Web Audio API)
-  let audioCtx = null;
-  let analyser = null;
-  let analyserData = null;
-  function setupAnalyser() {
-    try {
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      const source = audioCtx.createMediaStreamSource(mediaStream);
-      analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 512;
-      source.connect(analyser);
-      analyserData = new Uint8Array(analyser.fftSize);
-    } catch (err) {
-      analyser = null; // เบราว์เซอร์บางตัวอาจไม่รองรับ ไม่เป็นไร ข้ามกราฟสดไป
-    }
-  }
-  function readMicLevel() {
-    if (!analyser) return 0;
-    analyser.getByteTimeDomainData(analyserData);
-    let sum = 0;
-    for (let i = 0; i < analyserData.length; i++) {
-      const v = (analyserData[i] - 128) / 128;
-      sum += v * v;
-    }
-    return Math.min(1, Math.sqrt(sum / analyserData.length) * 3.2); // ขยายสัญญาณให้เห็นชัดขึ้น
-  }
+  // กราฟพลังเสียง: ตอนฟัง (มีเงาต้นฉบับให้ไล่ตาม) / ตอนเฉลยเทียบกัน
+  // (ตัดกราฟตอนอัดออกไปแล้ว เพราะสเกล/ช่วงเวลาของกราฟสดกับเงาต้นฉบับไม่ตรงกัน โดยเฉพาะเสียงสั้นๆ)
+  const pListenWave = MimicWaveGraph.create($('pListenWaveGraph'));
+  const pRevealWave = MimicWaveGraph.create($('revealWaveGraph'));
 
   const views = ['join', 'waiting', 'play', 'reveal', 'roundresult', 'gameover'];
   function showView(name) {
@@ -72,7 +56,6 @@
   async function requestMic() {
     try {
       mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      setupAnalyser();
       $('micStatus').textContent = '🎙️ พร้อมใช้ไมค์แล้ว';
       $('retryMicBtn').style.display = 'none';
       return true;
@@ -198,7 +181,9 @@
     }
     if (me.role === 'observer') {
       showPlayStage('observe');
+      stopActiveAudio();
       const audio = new Audio(data.soundUrl);
+      activeAudio = audio;
       audio.play().catch(() => {});
       return;
     }
@@ -206,12 +191,14 @@
     showPlayStage('listen');
     currentReferenceEnvelope = data.envelope || null;
     pListenWave.setGhost(currentReferenceEnvelope);
+    stopActiveAudio();
     const audio = new Audio(data.soundUrl);
+    activeAudio = audio;
     let started = false;
     const startRec = () => {
       if (started) return;
       started = true;
-      beginRecording(data.recordMs, data.roundIndex);
+      beginRecording(data.recordMs, data.durationMs, data.roundIndex);
     };
     audio.addEventListener('ended', startRec);
     audio.addEventListener('error', () => setTimeout(startRec, 300));
@@ -220,15 +207,16 @@
     setTimeout(startRec, data.durationMs + 4000);
   });
 
-  function beginRecording(recordMs, roundIndex) {
+  function beginRecording(recordMs, durationMs, roundIndex) {
+    // กันเผื่อเสียงต้นฉบับยังเล่นค้างอยู่ (เช่น timeout สำรองสั่งเริ่มอัดไปแล้ว แต่ play() ที่ล้มเหลวก่อนหน้าดันเล่นสำเร็จขึ้นมาทีหลัง)
+    // ไม่ให้เสียงต้นฉบับไปปนกับที่ไมค์กำลังอัดอยู่
+    stopActiveAudio();
     if (!mediaStream) {
       // ไม่มีไมค์ (โดนปฏิเสธสิทธิ์) — ข้ามไปสถานะส่งแล้วเลย เพื่อไม่ให้ค้าง
       showPlayStage('sent');
       return;
     }
     showPlayStage('record');
-    pRecordWave.setGhost(currentReferenceEnvelope);
-    pRecordWave.reset();
     const chunks = [];
     let mimeType = 'audio/webm';
     if (window.MediaRecorder && MediaRecorder.isTypeSupported && !MediaRecorder.isTypeSupported(mimeType)) {
@@ -256,15 +244,10 @@
       if (elapsed >= recordMs) clearInterval(timerInterval);
     }, 100);
 
-    // อัปเดตกราฟพลังเสียงสดๆ ให้เห็นว่าตัวเองพูดดัง-เบายังไง เทียบกับเงาต้นฉบับด้านหลัง
-    const barCount = MimicWaveGraph.BAR_COUNT;
-    const waveInterval = setInterval(() => {
-      pRecordWave.pushLive(readMicLevel());
-    }, Math.max(30, recordMs / barCount));
-
+    // ตัดกราฟคลื่นเสียงสดตอนอัดออกไปแล้ว (เคยมีปัญหาเรื่องสเกล/ช่วงเวลาไม่ตรงกับเงาต้นฉบับ โดยเฉพาะเสียงสั้นๆ)
+    // เหลือแค่แถบเวลา + ตัวเลขนับถอยหลังด้านล่าง ให้รู้ว่าเหลือเวลาอัดอีกเท่าไหร่ก็พอ ไม่ต้องพึ่งกราฟ
     setTimeout(() => {
       clearInterval(timerInterval);
-      clearInterval(waveInterval);
       if (currentRecorder && currentRecorder.state !== 'inactive') currentRecorder.stop();
     }, recordMs);
   }
@@ -290,8 +273,10 @@
     $('revealScoreWrap').classList.add('hidden');
     pRevealWave.setGhost(data.referenceEnvelope);
     pRevealWave.reset();
+    stopActiveAudio(); // หยุดเสียงเฉลยของคนก่อนหน้าก่อนเสมอ กันเสียงซ้อนกันตอนเปลี่ยนไปเฉลยคนถัดไปเร็วกว่าเสียงเดิมเล่นจบ
     if (data.url) {
       const audio = new Audio(data.url);
+      activeAudio = audio;
       audio.play().catch(() => {});
     }
     setTimeout(() => {
