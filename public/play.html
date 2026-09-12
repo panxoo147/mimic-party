@@ -36,6 +36,30 @@
       <div id="micStatus" class="small"></div>
       <button class="btn ghost" id="retryMicBtn" style="display:none;">🎙️ ขออนุญาตใช้ไมค์อีกครั้ง</button>
     </div>
+
+    <!-- Calibrate ไมค์: เฉพาะคนที่เล่น (role=player) ไม่ใช่คนดูอย่างเดียว -->
+    <div class="card col hidden" id="calibrateCard">
+      <h3 style="margin-bottom:0;">ปรับเทียบไมค์ 🎚️</h3>
+      <p class="muted small" style="margin-top:2px;">ช่วยให้ระบบจับเสียงพูดของคุณแม่นยำขึ้น เพราะไมค์แต่ละเครื่องไวไม่เท่ากัน (ใช้เวลาไม่ถึง 5 วิ)</p>
+
+      <div id="calibrateIdle">
+        <button class="btn secondary block" id="startCalibrateBtn">🎚️ เริ่มปรับเทียบไมค์</button>
+      </div>
+
+      <div id="calibrateRunning" class="hidden col center">
+        <div class="pulse-ring" id="calibratePulse" style="width:90px; height:90px; font-size:2rem; margin:8px auto;">🤫</div>
+        <h3 id="calibrateStepText" style="margin:0;">อยู่เงียบๆ ก่อนนะ...</h3>
+        <div class="progressbar"><div class="fill" id="calibrateFill"></div></div>
+      </div>
+
+      <div id="calibrateDone" class="hidden row between" style="align-items:center;">
+        <span class="badge player">✅ ปรับเทียบไมค์แล้ว</span>
+        <button type="button" class="btn ghost small" id="recalibrateBtn">ทำใหม่</button>
+      </div>
+
+      <div id="calibrateError" class="small hidden" style="color:var(--danger);"></div>
+    </div>
+
     <div class="card col">
       <h3>ผู้เล่นในห้อง</h3>
       <div class="player-list" id="waitingPlayerList"></div>
@@ -56,6 +80,9 @@
       <div id="pStageRecord" class="hidden">
         <div class="pulse-ring">🎙️</div>
         <h2>เลียนแบบเลย!</h2>
+        <!-- ซ่อนกราฟคลื่นเสียงตอนอัดไว้ก่อนตามที่ผู้ใช้ขอ (ยังไม่ลบโค้ด/องค์ประกอบ เผื่อเอากลับมาใช้ทีหลัง แค่เอา class="hidden" ออกก็พอ) -->
+        <div id="pRecordWaveGraph" class="hidden"></div>
+        <div class="wavegraph-legend hidden"><span><span class="dot ghost"></span>รูปร่างต้นฉบับ (เลียนแบบให้เหมือน)</span></div>
         <div class="progressbar" style="margin-top:10px;"><div class="fill" id="pRecordFill"></div></div>
         <div class="small muted" id="pRecordTimer" style="margin-top:6px;"></div>
       </div>
@@ -63,6 +90,13 @@
         <div style="font-size:3rem;">✅</div>
         <h2>ส่งเสียงแล้ว!</h2>
         <p class="muted">รอเพื่อนคนอื่นเลียนแบบให้เสร็จ...</p>
+        <!-- กราฟนี้คือผลวิเคราะห์จริงจาก server (ตัวเดียวกับที่ตอนเฉลยผลจะโชว์เป๊ะๆ) ไม่ใช่ค่าประมาณสดตอนอัดแล้ว
+             เลยรับประกันว่าจะตรงกับตอนเฉลยผล 100% (ต่างจากกราฟตอนอัดที่เป็นแค่การประมาณระดับไมค์สดๆ) -->
+        <div id="pSentWaveGraph"></div>
+        <div class="wavegraph-legend">
+          <span><span class="dot ghost"></span>เสียงต้นฉบับ</span>
+          <span><span class="dot live"></span>เสียงที่คุณอัด (ผลวิเคราะห์จริง)</span>
+        </div>
       </div>
       <div id="pStageObserve" class="hidden">
         <div class="pulse-ring observing">👀</div>

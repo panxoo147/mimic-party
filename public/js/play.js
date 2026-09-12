@@ -21,10 +21,44 @@
     }
   }
 
-  // กราฟพลังเสียง: ตอนฟัง (มีเงาต้นฉบับให้ไล่ตาม) / ตอนเฉลยเทียบกัน
-  // (ตัดกราฟตอนอัดออกไปแล้ว เพราะสเกล/ช่วงเวลาของกราฟสดกับเงาต้นฉบับไม่ตรงกัน โดยเฉพาะเสียงสั้นๆ)
+  // กราฟพลังเสียง 3 จุด: ตอนฟัง / ตอนอัด (มีเงาต้นฉบับให้ไล่ตาม) / ตอนเฉลยเทียบกัน
+  // (เอากราฟตอนอัดกลับมาอีกครั้ง หลังแก้ 2 จุดที่เคยทำให้ไม่ตรงกับเงาต้นฉบับ: (1) กราฟเคยขับด้วย recordMs
+  // ทั้งที่เงาอิงแค่ durationMs ของเสียงต้นฉบับ ทำให้เสียงสั้นๆ กราฟเติมได้แค่บางส่วนแล้วค้างว่างยาวๆ — ตอนนี้
+  // ขับด้วย durationMs เหมือนเงาแล้ว (ดู graphMs ใน beginRecording), (2) ระดับไมค์สดเคยใช้สเกลตายตัวทำให้ดูเบา
+  // กว่าความเป็นจริงเทียบกับกราฟ normalize หลังวิเคราะห์ — ตอนนี้ wavegraph.js normalize เทียบค่าดังสุดที่เจอเองแล้ว)
   const pListenWave = MimicWaveGraph.create($('pListenWaveGraph'));
+  const pRecordWave = MimicWaveGraph.create($('pRecordWaveGraph'));
+  const pSentWave = MimicWaveGraph.create($('pSentWaveGraph'));
   const pRevealWave = MimicWaveGraph.create($('revealWaveGraph'));
+
+  // สำหรับวัดระดับเสียงไมค์แบบสดๆ ระหว่างอัด (Web Audio API) — ใช้เฉพาะขับกราฟสด ไม่เกี่ยวกับไฟล์เสียงที่อัปโหลดจริง
+  let audioCtx = null;
+  let analyser = null;
+  let analyserData = null;
+  function setupAnalyser() {
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const source = audioCtx.createMediaStreamSource(mediaStream);
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 512;
+      source.connect(analyser);
+      analyserData = new Uint8Array(analyser.fftSize);
+    } catch (err) {
+      analyser = null; // เบราว์เซอร์บางตัวอาจไม่รองรับ ไม่เป็นไร ข้ามกราฟสดไป
+    }
+  }
+  function readMicLevel() {
+    if (!analyser) return 0;
+    analyser.getByteTimeDomainData(analyserData);
+    let sum = 0;
+    for (let i = 0; i < analyserData.length; i++) {
+      const v = (analyserData[i] - 128) / 128;
+      sum += v * v;
+    }
+    // หมายเหตุ: ไม่ clamp ที่ 1 เพราะกราฟฝั่ง advanceTo() จะ normalize เทียบกับค่าสูงสุดที่เจอเองระหว่างอัด
+    // (เหมือนวิธีที่ server normalize กราฟหลังวิเคราะห์) ถ้า clamp ไว้ที่นี่ก่อน จะทำให้เสียงที่ไม่ถึงเพดานดูเตี้ยกว่าความเป็นจริง
+    return Math.sqrt(sum / analyserData.length) * 3.2;
+  }
 
   const views = ['join', 'waiting', 'play', 'reveal', 'roundresult', 'gameover'];
   function showView(name) {
@@ -56,6 +90,7 @@
   async function requestMic() {
     try {
       mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      setupAnalyser();
       $('micStatus').textContent = '🎙️ พร้อมใช้ไมค์แล้ว';
       $('retryMicBtn').style.display = 'none';
       return true;
@@ -65,7 +100,93 @@
       return false;
     }
   }
-  $('retryMicBtn').addEventListener('click', requestMic);
+  $('retryMicBtn').addEventListener('click', async () => {
+    const gotMic = await requestMic();
+    if (gotMic && me && me.role === 'player') $('calibrateCard').classList.remove('hidden');
+  });
+
+  // ---------- ปรับเทียบไมค์ (calibrate) ----------
+  // อัดคลิปสั้นๆ 2 ช่วง (เงียบๆ / พูดดังๆ) ด้วย MediaRecorder ตัวเดียวกับที่ใช้อัดคำตอบจริงตอนเล่นเกม
+  // แล้วส่งไฟล์จริงไปให้ server วิเคราะห์ด้วย pipeline เดียวกับตอนส่งคำตอบ (ffmpeg → RMS) เพื่อให้ค่าที่วัดได้
+  // อยู่ในสเกลเดียวกับที่จะถูกใช้เทียบจริงตอนเล่น — ถ้าวัดด้วยวิธีอื่น (เช่น Web Audio analyser สดในเบราว์เซอร์)
+  // ค่าจะไม่ตรงสเกลกับที่ ffmpeg ถอดรหัสไฟล์ที่บันทึกจริงได้ เพราะผ่านการเข้ารหัส/ประมวลผลคนละขั้นตอนกัน
+  const CALIBRATE_PHASE_MS = 1500;
+  let calibrating = false;
+
+  function recordClip(ms) {
+    return new Promise((resolve, reject) => {
+      if (!mediaStream) { reject(new Error('ไม่มีไมค์')); return; }
+      const chunks = [];
+      let mimeType = 'audio/webm';
+      if (window.MediaRecorder && MediaRecorder.isTypeSupported && !MediaRecorder.isTypeSupported(mimeType)) mimeType = '';
+      let rec;
+      try { rec = mimeType ? new MediaRecorder(mediaStream, { mimeType }) : new MediaRecorder(mediaStream); }
+      catch (err) { reject(err); return; }
+      rec.ondataavailable = (e) => { if (e.data && e.data.size > 0) chunks.push(e.data); };
+      rec.onstop = () => resolve(new Blob(chunks, { type: rec.mimeType || 'audio/webm' }));
+      rec.onerror = (e) => reject((e && e.error) || new Error('อัดเสียงไม่สำเร็จ'));
+      rec.start();
+      setTimeout(() => { if (rec.state !== 'inactive') rec.stop(); }, ms);
+    });
+  }
+
+  function animateCalibrateFill(ms) {
+    const fill = $('calibrateFill');
+    fill.style.transition = 'none';
+    fill.style.width = '0%';
+    // บังคับ reflow ก่อน ไม่งั้นเบราว์เซอร์อาจรวมสอง style เข้าด้วยกันจนไม่มี transition ให้เห็นตอนเริ่มแท่งใหม่
+    void fill.offsetWidth;
+    fill.style.transition = `width ${ms}ms linear`;
+    fill.style.width = '100%';
+  }
+
+  function setCalibrateStage(stage) {
+    $('calibrateIdle').classList.toggle('hidden', stage !== 'idle');
+    $('calibrateRunning').classList.toggle('hidden', stage !== 'running');
+    $('calibrateDone').classList.toggle('hidden', stage !== 'done');
+  }
+
+  async function runCalibration() {
+    if (calibrating || !mediaStream) return;
+    calibrating = true;
+    $('calibrateError').classList.add('hidden');
+    setCalibrateStage('running');
+    try {
+      $('calibrateStepText').textContent = 'อยู่เงียบๆ ก่อนนะ... 🤫';
+      $('calibratePulse').textContent = '🤫';
+      animateCalibrateFill(CALIBRATE_PHASE_MS);
+      const silenceBlob = await recordClip(CALIBRATE_PHASE_MS);
+
+      $('calibrateStepText').textContent = 'พูดออกมาดังๆ เลย! 🗣️';
+      $('calibratePulse').textContent = '🗣️';
+      animateCalibrateFill(CALIBRATE_PHASE_MS);
+      const voiceBlob = await recordClip(CALIBRATE_PHASE_MS);
+
+      $('calibrateStepText').textContent = 'กำลังประมวลผล...';
+      const [silenceData, voiceData] = await Promise.all([silenceBlob.arrayBuffer(), voiceBlob.arrayBuffer()]);
+
+      const res = await new Promise((resolve) => {
+        socket.emit('player:calibrate', { silenceData, voiceData }, (r) => resolve(r || { ok: false, error: 'ไม่ได้รับคำตอบจากเซิร์ฟเวอร์' }));
+      });
+
+      if (res.ok) {
+        setCalibrateStage('done');
+      } else {
+        setCalibrateStage('idle');
+        $('calibrateError').textContent = 'ปรับเทียบไม่สำเร็จ: ' + (res.error || 'ไม่ทราบสาเหตุ');
+        $('calibrateError').classList.remove('hidden');
+      }
+    } catch (err) {
+      setCalibrateStage('idle');
+      $('calibrateError').textContent = 'เกิดข้อผิดพลาด: ' + err.message;
+      $('calibrateError').classList.remove('hidden');
+    } finally {
+      calibrating = false;
+    }
+  }
+
+  $('startCalibrateBtn').addEventListener('click', runCalibration);
+  $('recalibrateBtn').addEventListener('click', () => setCalibrateStage('idle'));
 
   $('joinBtn').addEventListener('click', async () => {
     const code = $('roomCodeInput').value.trim().toUpperCase();
@@ -90,7 +211,9 @@
       localStorage.setItem(storageKey, me.id);
       $('myScoreBadge').classList.remove('hidden');
       if (me.role === 'player') {
-        await requestMic();
+        const gotMic = await requestMic();
+        // มีไมค์แล้วค่อยโชว์การ์ด calibrate — คนที่ไม่ได้อนุญาตไมค์ไว้ตั้งแต่แรกจะยังไม่เห็น จนกว่าจะกด "ขออนุญาตใช้ไมค์อีกครั้ง" สำเร็จ
+        if (gotMic) $('calibrateCard').classList.remove('hidden');
       } else {
         $('micStatus').textContent = 'โหมดดูอย่างเดียว ไม่ต้องใช้ไมค์';
       }
@@ -217,6 +340,8 @@
       return;
     }
     showPlayStage('record');
+    pRecordWave.setGhost(currentReferenceEnvelope);
+    pRecordWave.reset();
     const chunks = [];
     let mimeType = 'audio/webm';
     if (window.MediaRecorder && MediaRecorder.isTypeSupported && !MediaRecorder.isTypeSupported(mimeType)) {
@@ -234,26 +359,58 @@
     };
     currentRecorder.start();
 
+    // จุดสำคัญ (แก้ปัญหา "สองเส้นไม่สอดคล้องกัน" ที่ผู้ใช้เจอ): เดิมกราฟคลื่นเสียง (บน) ขับด้วย durationMs
+    // (ความยาวเสียงต้นฉบับ) แต่แถบนับถอยหลัง/เวลา (ล่าง) ขับด้วย recordMs (เวลาอัดทั้งหมด ซึ่งมีเวลาขั้นต่ำ 3 วิ
+    // + เผื่อพูดจบท้ายเสียงบวกเพิ่มเข้าไปอีก จึงยาวกว่า durationMs มาก โดยเฉพาะเสียงสั้นๆ) ทำให้สองเส้นนี้วิ่งเร็วช้า
+    // ไม่เท่ากันชัดเจน (กราฟคลื่นเติมเต็มไปนานแล้ว ทั้งที่แถบเวลาด้านล่างเพิ่งเดินไปได้ไม่ถึงครึ่ง) ดูเหมือนขัดแย้งกันเอง
+    // ทั้งที่ตัวเลข durationMs เองแม่นอยู่แล้ว (ทดสอบเทียบกับเวลาเล่นจริงในเบราว์เซอร์แล้ว คลาดเคลื่อนแค่ระดับ ~0.03 วิ)
+    //
+    // แก้โดยให้ทั้งคู่ขับด้วยเวลาเดียวกันเป๊ะๆ คือ graphMs (อิง durationMs ไม่ใช่ recordMs เพราะถ้าใช้ recordMs
+    // ขับกราฟ เสียงสั้นๆ จะทำให้กราฟเงาต้นฉบับดูยืด/บีบผิดสัดส่วนไปอีกแบบ) พอถึง graphMs ทั้งกราฟคลื่นและแถบเวลา
+    // จะเต็ม/หมดเวลาพร้อมกันเป๊ะ ส่วนเวลาที่เหลือจนกว่าจะครบ recordMs จริง (buffer เผื่อพูดจบท้ายเสียง) ปล่อยให้ไมค์
+    // อัดต่อเงียบๆ อยู่เบื้องหลังโดยไม่ต้องโชว์อะไรเพิ่ม (ทั้งสองแถบค้างเต็ม/0.0 วิ รอจนกว่าจะอัดจบจริง)
+    //
+    // เพิ่ม LEAD_IN_MS: หน่วงทั้งกราฟและแถบเวลาไม่ให้เริ่มขยับทันทีตอนเริ่มอัด เผื่อเวลาตั้งตัว/หายใจสั้นๆ ก่อนเริ่ม
+    // พูดเลียนแบบจริง (ไม่งั้นต่อให้ตัวเลขแม่น ก็ยังรู้สึกว่ากราฟ "วิ่งเร็วกว่า" เพราะขยับไปก่อนที่จะเริ่มพูดจริง)
+    const barCount = MimicWaveGraph.BAR_COUNT;
+    const graphMs = Math.min(recordMs, Math.max(300, durationMs || recordMs));
+    const LEAD_IN_MS = Math.min(300, Math.max(0, graphMs - 300));
+
     const startedAt = Date.now();
     $('pRecordFill').style.width = '0%';
     const timerInterval = setInterval(() => {
-      const elapsed = Date.now() - startedAt;
-      const pct = Math.min(100, (elapsed / recordMs) * 100);
+      const totalElapsed = Date.now() - startedAt;
+      const graphElapsed = Math.max(0, totalElapsed - LEAD_IN_MS);
+      const pct = Math.min(100, (graphElapsed / graphMs) * 100);
       $('pRecordFill').style.width = pct + '%';
-      $('pRecordTimer').textContent = `${Math.max(0, ((recordMs - elapsed) / 1000)).toFixed(1)} วิ`;
-      if (elapsed >= recordMs) clearInterval(timerInterval);
+      $('pRecordTimer').textContent = `${Math.max(0, ((graphMs - graphElapsed) / 1000)).toFixed(1)} วิ`;
+      if (totalElapsed >= recordMs) clearInterval(timerInterval);
     }, 100);
 
-    // ตัดกราฟคลื่นเสียงสดตอนอัดออกไปแล้ว (เคยมีปัญหาเรื่องสเกล/ช่วงเวลาไม่ตรงกับเงาต้นฉบับ โดยเฉพาะเสียงสั้นๆ)
-    // เหลือแค่แถบเวลา + ตัวเลขนับถอยหลังด้านล่าง ให้รู้ว่าเหลือเวลาอัดอีกเท่าไหร่ก็พอ ไม่ต้องพึ่งกราฟ
+    // อัปเดตกราฟพลังเสียงสดๆ ให้เห็นว่าตัวเองพูดดัง-เบายังไง เทียบกับเงาต้นฉบับด้านหลัง ใช้ "สัดส่วนเวลาจริงที่ผ่านไปแล้ว"
+    // ขับกราฟ (แทนการนับจำนวนครั้งที่ setInterval ทำงาน) เพราะถ้านับจำนวนครั้งเฉยๆ พอ setInterval โดนเบราว์เซอร์หน่วง
+    // (เช่นแท็บถูกลดความสำคัญ/เครื่องมีงานอื่นแทรก) กราฟจะเติมไม่ทันเวลาอัดจริงหมดไปแล้ว ค้างเติมได้แค่บางส่วน
+    const waveInterval = setInterval(() => {
+      const graphElapsed = (Date.now() - startedAt) - LEAD_IN_MS;
+      if (graphElapsed < 0) return; // ยังอยู่ในช่วงหน่วงตั้งตัว กราฟยังไม่ต้องขยับ
+      pRecordWave.advanceTo(graphElapsed / graphMs, readMicLevel());
+    }, Math.max(30, graphMs / barCount));
+
     setTimeout(() => {
       clearInterval(timerInterval);
+      clearInterval(waveInterval);
+      $('pRecordFill').style.width = '100%';
+      $('pRecordTimer').textContent = '0.0 วิ';
+      pRecordWave.advanceTo(1, readMicLevel()); // กันเผื่อ tick สุดท้ายไม่ทัน ให้กราฟเติมเต็มเส้นเสมอตอนอัดจบจริง
       if (currentRecorder && currentRecorder.state !== 'inactive') currentRecorder.stop();
     }, recordMs);
   }
 
   function uploadTake(blob, roundIndex) {
     showPlayStage('sent');
+    // เพิ่งอัปโหลด ยังไม่มีผลวิเคราะห์จริงกลับมา — โชว์แค่เงาต้นฉบับไปก่อน รอ 'take:analyzed' มาเติมเส้นจริง
+    pSentWave.setGhost(currentReferenceEnvelope);
+    pSentWave.reset();
     const form = new FormData();
     form.append('playerId', me.id);
     form.append('roundIndex', String(roundIndex));
@@ -263,6 +420,13 @@
       .then((res) => { if (!res.ok && res.error !== 'stale_round') toast('ส่งเสียงไม่สำเร็จ: ' + res.error); })
       .catch(() => toast('ส่งเสียงไม่สำเร็จ (เน็ตหลุด?)'));
   }
+
+  // ผลวิเคราะห์เสียงจริงจาก server (envelope ชุดเดียวกับที่ตอนเฉลยผลจะโชว์ เป๊ะๆ ไม่ใช่ค่าประมาณ) — มาถึงเร็วกว่า
+  // ตอนเฉลยผลของรอบมาก (ไม่ต้องรอคิวเฉลยทีละคน) เลยเอามาโชว์แทนกราฟประมาณสดตอนอัดได้เลยที่หน้า "ส่งเสียงแล้ว"
+  // รับประกันว่ารูปคลื่นที่เห็นตรงนี้จะตรงกับตอนเฉลยผล 100% เพราะเป็นข้อมูลชุดเดียวกัน
+  socket.on('take:analyzed', (data) => {
+    pSentWave.setLive(data.silent || data.failed ? null : data.envelope);
+  });
 
   socket.on('round:reveal_take', (data) => {
     showView('reveal');

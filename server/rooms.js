@@ -67,6 +67,9 @@ class Room {
       connected: true,
       score: 0,
       lastRoundScore: null,
+      // ผลจาก calibrate ไมค์ (ถ้ายังไม่ได้ calibrate จะเป็น null แล้วใช้ค่ากลางของระบบแทนตอนวิเคราะห์เสียง)
+      silenceThreshold: null,
+      calibrated: false,
     };
     this.players.set(id, player);
     this.socketToId.set(socketId, id);

@@ -13,7 +13,7 @@ const QRCode = require('qrcode');
 const { Server } = require('socket.io');
 
 const soundLibrary = require('./soundLibrary');
-const { analyzeFile, scoreAgainstReference } = require('./audio');
+const { analyzeFile, scoreAgainstReference, calibratedSilenceThreshold } = require('./audio');
 const { RoomManager, PHASES } = require('./rooms');
 const { getOrCreateCert } = require('./certs');
 
@@ -22,12 +22,43 @@ const HTTPS_PORT = process.env.HTTPS_PORT || 3443;
 const ROOT = path.join(__dirname, '..');
 const UPLOADS_TAKES_DIR = path.join(ROOT, 'uploads', 'takes');
 fs.mkdirSync(UPLOADS_TAKES_DIR, { recursive: true });
+const UPLOADS_CALIBRATION_DIR = path.join(ROOT, 'uploads', 'calibration');
+fs.mkdirSync(UPLOADS_CALIBRATION_DIR, { recursive: true });
+
+// ไฟล์เสียงที่ผู้เล่นอัดส่งมาเก็บอยู่ในเครื่อง host เอง (เกมนี้รันเซิร์ฟเวอร์บนเครื่อง host เอง ไม่ได้มี server
+// แยกต่างหากที่ไหน) ไม่อยากให้โฟลเดอร์นี้พอกพูนไปเรื่อยๆ ตามจำนวนรอบ/จำนวนครั้งที่เล่น จึงลบทิ้งทันทีที่ไม่ต้องใช้แล้ว
+// (ดู cleanupRoundTakeFiles) แต่เผื่อกรณีปิด server กะทันหันกลางเกม (ไฟล์ค้างไม่ได้ถูกลบ) เลยเคลียร์ไฟล์ที่ตกค้าง
+// จากการรันครั้งก่อนทิ้งไปเลยตอนเริ่ม server ใหม่ทุกครั้งด้วย
+try {
+  for (const f of fs.readdirSync(UPLOADS_TAKES_DIR)) {
+    try { fs.unlinkSync(path.join(UPLOADS_TAKES_DIR, f)); } catch { /* เพิกเฉย ไฟล์เดียวลบไม่ได้ก็ข้ามไป */ }
+  }
+} catch (err) {
+  console.error('[cleanup] เคลียร์ไฟล์เสียงที่อัดค้างจากรอบก่อนไม่สำเร็จ:', err.message);
+}
+
+/** ลบไฟล์เสียงที่ผู้เล่นอัดส่งมาของรอบหนึ่งๆ ทิ้งจากดิสก์ เรียกตอนรอบนั้นเฉลยผลจบแล้ว (ไม่มีที่ไหนอ้างอิงไฟล์นี้ต่อแล้ว) */
+function cleanupRoundTakeFiles(round) {
+  if (!round || !round.submissions) return;
+  for (const sub of round.submissions.values()) {
+    if (!sub.url) continue; // เงียบ/หมดเวลา/วิเคราะห์ล้มเหลว ไม่มีไฟล์อยู่แล้ว
+    const filePath = path.join(UPLOADS_TAKES_DIR, path.basename(sub.url));
+    fs.unlink(filePath, (err) => {
+      if (err && err.code !== 'ENOENT') {
+        console.error('[cleanup] ลบไฟล์เสียงที่อัดไม่สำเร็จ:', filePath, err.message);
+      }
+    });
+  }
+}
 
 const MIN_RECORD_MS = 3000;
 const RECORD_BUFFER_MS = 1200;
 const FORCE_FINISH_EXTRA_MS = 15000;
-const REVEAL_MIN_GAP_MS = 1800;
-const REVEAL_MAX_GAP_MS = 8000;
+// เวลาที่แต่ละคนถูกเฉลยผล/โชว์คะแนนค้างอยู่บนจอ ก่อนขึ้นคนถัดไป (นับรวมเวลาที่เล่นเสียงเลียนแบบด้วย)
+// ปรับให้นานขึ้นตามที่ผู้ใช้ขอ เพื่อให้มีเวลาอ่านคะแนน/รูปคลื่นเทียบกันจริงๆ ก่อนเปลี่ยนคนถัดไป
+const REVEAL_MIN_GAP_MS = 3000; // กรณีไม่มีเสียงเล่น (เงียบ/timeout/failed) — เดิม 1800
+const REVEAL_SCORE_VIEW_MS = 2800; // เวลาที่เผื่อไว้ "หลังจากเสียงเล่นจบ" ให้มองคะแนนได้ทัน — เดิม 1300
+const REVEAL_MAX_GAP_MS = 10000; // เพดานสูงสุดต่อคน กันไม่ให้เสียงยาวๆ ทำให้ค้างนานเกินไป — เดิม 8000
 const ROUND_RESULT_AUTO_MS = 8000;
 
 const app = express();
@@ -134,7 +165,8 @@ app.post('/api/rooms/:code/submit', upload.single('audio'), (req, res) => {
 
 async function processSubmission(room, roundIndex, player, filename, filePath) {
   try {
-    const sig = await analyzeFile(filePath);
+    // ใช้ threshold ตรวจจับความเงียบเฉพาะคน (จากการ calibrate ไมค์ก่อนเกม) ถ้ามี ไม่งั้น analyzeFile จะใช้ค่ากลางเอง
+    const sig = await analyzeFile(filePath, { silenceThreshold: player.silenceThreshold });
     if (room.phase !== PHASES.LISTEN_RECORD || room.roundIndex !== roundIndex) return;
     const soundEntry = room.currentRound.soundEntry;
     const { score, shapeScore, rhythmScore, melodyScore, effectivelySilent } = scoreAgainstReference(soundEntry, sig);
@@ -151,6 +183,15 @@ async function processSubmission(room, roundIndex, player, filename, filePath) {
       silent: !!effectivelySilent,
       name: player.name,
     });
+    // ส่งผลวิเคราะห์จริง (envelope เดียวกับที่ตอนเฉลยผลจะโชว์ เป๊ะๆ ไม่ใช่ค่าประมาณ) กลับไปให้ "เจ้าของเสียงคนนั้น"
+    // คนเดียวทันทีที่วิเคราะห์เสร็จ (ไม่ต้องรอถึงคิวเฉลยผลของรอบ) เพื่อให้หน้า "ส่งเสียงแล้ว" โชว์รูปคลื่นที่แท้จริง
+    // แทนกราฟประมาณสดๆ ตอนอัด (ซึ่งมาจากคนละ pipeline กัน เลยไม่มีทางตรงกันเป๊ะ) — อันนี้เป็นข้อมูลชุดเดียวกับที่
+    // จะใช้ตอนเฉลยผลจริงๆ เลย รับประกันว่าตรงกัน 100%
+    io.to(player.socketId).emit('take:analyzed', {
+      envelope: sig.envelope,
+      durationMs: sig.durationMs,
+      silent: !!effectivelySilent,
+    });
     broadcastSubmitProgress(room, player);
     finishRoundIfReady(room);
   } catch (err) {
@@ -159,6 +200,7 @@ async function processSubmission(room, roundIndex, player, filename, filePath) {
       room.currentRound.submissions.set(player.id, {
         url: null, score: 0, shapeScore: 0, rhythmScore: 0, melodyScore: 0, envelope: null, silent: true, name: player.name, failed: true,
       });
+      io.to(player.socketId).emit('take:analyzed', { envelope: null, durationMs: 0, silent: true, failed: true });
       broadcastSubmitProgress(room, player);
       finishRoundIfReady(room);
     }
@@ -337,12 +379,15 @@ function scheduleNextReveal(room) {
   emitState(room);
   room.currentRound.revealPos += 1;
   const gap = take.durationMs
-    ? Math.min(REVEAL_MAX_GAP_MS, take.durationMs + 1300)
+    ? Math.min(REVEAL_MAX_GAP_MS, take.durationMs + REVEAL_SCORE_VIEW_MS)
     : REVEAL_MIN_GAP_MS;
   room.addTimer(() => scheduleNextReveal(room), gap);
 }
 
 function beginRoundResult(room) {
+  // เฉลยผลของทุกคนในรอบนี้จบแล้ว ไม่มีที่ไหนอ้างอิงไฟล์เสียงที่อัดมาของรอบนี้ต่อแล้ว ลบทิ้งจากเครื่อง host ได้เลย
+  // กันไม่ให้โฟลเดอร์ uploads/takes พอกพูนไปเรื่อยๆ ตามจำนวนรอบที่เล่น
+  cleanupRoundTakeFiles(room.currentRound);
   room.phase = PHASES.ROUND_RESULT;
   emitState(room);
   io.to(room.code).emit('round:result', {
@@ -521,6 +566,36 @@ io.on('connection', (socket) => {
         envelope: soundEntry.envelope,
         lateJoin: true,
       });
+    }
+  });
+
+  // ผู้เล่น calibrate ไมค์ก่อนเริ่มเกม: อัดเสียง 2 คลิปสั้นๆ ส่งมาจริง (เงียบๆ 1 คลิป + พูดดังๆ 1 คลิป)
+  // แล้ววิเคราะห์ด้วย pipeline เดียวกับตอนส่งคำตอบจริงระหว่างเกมทุกประการ (analyzeFile ตัวเดียวกัน) เพื่อให้ค่าที่วัดได้
+  // อยู่ใน "สเกลเดียวกัน" กับที่จะใช้เทียบจริงตอนเล่น (ถ้าวัดด้วยวิธีอื่น เช่น Web Audio analyser สดๆ ในเบราว์เซอร์
+  // ค่าจะไม่ตรงสเกลกับที่ ffmpeg ถอดรหัสได้ เพราะผ่านการเข้ารหัส/ประมวลผลเสียงคนละขั้นตอนกัน)
+  socket.on('player:calibrate', async ({ silenceData, voiceData } = {}, cb) => {
+    const room = manager.get(socket.data.roomCode);
+    if (!room) return cb && cb({ ok: false, error: 'ไม่พบห้อง' });
+    const player = room.getPlayerById(socket.data.playerId);
+    if (!player) return cb && cb({ ok: false, error: 'ไม่พบผู้เล่น' });
+    if (!silenceData || !voiceData) return cb && cb({ ok: false, error: 'ไม่มีข้อมูลเสียง' });
+
+    const tag = `${player.id}_${Date.now()}`;
+    const silencePath = path.join(UPLOADS_CALIBRATION_DIR, `${tag}_silence.webm`);
+    const voicePath = path.join(UPLOADS_CALIBRATION_DIR, `${tag}_voice.webm`);
+    try {
+      fs.writeFileSync(silencePath, Buffer.isBuffer(silenceData) ? silenceData : Buffer.from(silenceData));
+      fs.writeFileSync(voicePath, Buffer.isBuffer(voiceData) ? voiceData : Buffer.from(voiceData));
+      const [silenceSig, voiceSig] = await Promise.all([analyzeFile(silencePath), analyzeFile(voicePath)]);
+      player.silenceThreshold = calibratedSilenceThreshold(silenceSig.peakRaw, voiceSig.peakRaw);
+      player.calibrated = true;
+      cb && cb({ ok: true, threshold: player.silenceThreshold, noiseFloor: silenceSig.peakRaw, voicePeak: voiceSig.peakRaw });
+    } catch (err) {
+      cb && cb({ ok: false, error: 'วิเคราะห์เสียง calibrate ไม่สำเร็จ: ' + err.message });
+    } finally {
+      // ลบไฟล์ชั่วคราวทิ้งทันที ไม่ต้องเก็บไว้ (ต่างจาก take จริงที่เก็บไว้ให้ host เปิดฟังตอนเฉลยผล)
+      try { fs.unlinkSync(silencePath); } catch { /* เพิกเฉย */ }
+      try { fs.unlinkSync(voicePath); } catch { /* เพิกเฉย */ }
     }
   });
 

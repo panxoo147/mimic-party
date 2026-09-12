@@ -222,8 +222,18 @@ function countOnsets(env, threshold = 0.35) {
   return count;
 }
 
-/** สกัด "ลายเซ็นเสียง" ที่ใช้เทียบคะแนน จากไฟล์เสียงหนึ่งไฟล์ (shape + rhythm + melody) */
-async function analyzeFile(inputPath) {
+/**
+ * สกัด "ลายเซ็นเสียง" ที่ใช้เทียบคะแนน จากไฟล์เสียงหนึ่งไฟล์ (shape + rhythm + melody)
+ * @param {string} inputPath
+ * @param {{ silenceThreshold?: number }} [opts] - ค่า threshold ตรวจจับความเงียบเฉพาะคน (จากการ calibrate ไมค์)
+ *   ถ้าไม่ส่งมา หรือค่าไม่ถูกต้อง จะใช้ค่ากลาง SILENCE_RAW_RMS_THRESHOLD แทน (เช่น ตอนวิเคราะห์เสียงในคลังเสียง
+ *   ที่ไม่มีแนวคิด "ไมค์ของใคร" เกี่ยวข้องเลย)
+ */
+async function analyzeFile(inputPath, opts = {}) {
+  const silenceThreshold =
+    opts && typeof opts.silenceThreshold === 'number' && opts.silenceThreshold > 0
+      ? opts.silenceThreshold
+      : SILENCE_RAW_RMS_THRESHOLD;
   const { samples, durationMs } = await decodeToPCM(inputPath);
   const frameSize = Math.max(1, Math.round((SAMPLE_RATE * FRAME_MS) / 1000));
   const rawEnv = rmsEnvelope(samples, frameSize);
@@ -267,7 +277,7 @@ async function analyzeFile(inputPath) {
     pitch,
     voicedRatio,
     peakRaw,
-    silent: peakRaw < SILENCE_RAW_RMS_THRESHOLD,
+    silent: peakRaw < silenceThreshold,
   };
 }
 
@@ -410,9 +420,27 @@ function scoreAgainstReference(referenceSig, mimicSig) {
 // ถูกบังคับวิเคราะห์ใหม่โดยอัตโนมัติตอนรีเฟรชคลังเสียง แทนที่จะค้างข้อมูลที่แม่นยำน้อยกว่าไว้เงียบๆ
 const ANALYSIS_VERSION = 2;
 
+// ---------- calibrate ไมค์ต่อผู้เล่น ----------
+// SILENCE_RAW_RMS_THRESHOLD ด้านบนเป็นค่ากลางคงที่ ใช้ได้กับไมค์/ห้องส่วนใหญ่ แต่ไมค์บางเครื่อง (เกน/ความไว
+// ต่างกันมาก) หรือห้องที่มีเสียงรบกวนพื้นหลังเยอะ อาจทำให้ค่านี้เข้มไป (คนพูดเบาโดนตัดสินว่า "เงียบ") หรือหลวมไป
+// (noise ธรรมดาก็ถูกนับว่า "มีเสียงพูด") ฟังก์ชันนี้คำนวณ threshold เฉพาะคน จากขั้นตอน calibrate ก่อนเริ่มเกม
+// (ให้ผู้เล่นอยู่เงียบๆ วัด noise floor แล้วพูดดังๆ วัดระดับเสียงจริง) โดยตั้งเกณฑ์ไว้ระหว่างสองค่านี้ เอนไปทาง
+// noise floor เล็กน้อย (25%) กันไมค์ที่มี noise พื้นหลังสูงกว่าปกติ พร้อมกันขอบเขตไม่ให้หลุดเพี้ยนเกินไปจากกรณี
+// calibrate ผิดพลาด (เช่น พูดเบากว่าตอนอยู่เงียบ)
+const CALIBRATION_MIN_THRESHOLD = SILENCE_RAW_RMS_THRESHOLD * 0.4;
+const CALIBRATION_MAX_THRESHOLD = SILENCE_RAW_RMS_THRESHOLD * 8;
+function calibratedSilenceThreshold(noiseFloor, voicePeak) {
+  const nf = Number.isFinite(noiseFloor) && noiseFloor >= 0 ? noiseFloor : 0;
+  const vp = Number.isFinite(voicePeak) && voicePeak >= 0 ? voicePeak : 0;
+  if (vp <= nf) return SILENCE_RAW_RMS_THRESHOLD; // ข้อมูล calibrate ดูผิดปกติ ใช้ค่ากลางแทนไปก่อน
+  const raw = nf + (vp - nf) * 0.25;
+  return Math.min(CALIBRATION_MAX_THRESHOLD, Math.max(CALIBRATION_MIN_THRESHOLD, raw));
+}
+
 module.exports = {
   analyzeFile,
   scoreAgainstReference,
+  calibratedSilenceThreshold,
   ENVELOPE_POINTS,
   SILENCE_RAW_RMS_THRESHOLD,
   ANALYSIS_VERSION,
