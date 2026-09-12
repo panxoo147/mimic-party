@@ -1,0 +1,160 @@
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mimic Party — จอ Host</title>
+<link rel="stylesheet" href="/css/style.css">
+
+<div id="tapGate" class="container center" style="justify-content:center;">
+  <div class="card">
+    <h1>🎤 Mimic Party</h1>
+    <p class="muted">แตะเพื่อเริ่มระบบเสียงของจอนี้</p>
+    <button class="btn primary big" id="tapGateBtn">แตะเพื่อเริ่ม</button>
+  </div>
+</div>
+
+<div id="app" class="container hidden">
+
+  <div class="row between">
+    <h1>🎤 Mimic Party</h1>
+    <span id="roomBadge" class="badge hidden">ห้อง <b id="roomBadgeCode">----</b></span>
+  </div>
+
+  <!-- LOBBY -->
+  <section id="view-lobby" class="hidden col">
+    <div class="card row" style="align-items:flex-start;">
+      <div class="col" style="flex:1; min-width:220px;">
+        <div class="muted">รหัสห้อง</div>
+        <div class="room-code" id="roomCode">----</div>
+        <div class="col" style="margin-top:10px; align-items:flex-start;">
+          <div class="qr-wrap" id="qrWrap" role="button" tabindex="0" aria-label="แตะเพื่อขยาย QR ให้ใหญ่ขึ้น"><img id="qrImg" alt="QR เข้าห้อง"></div>
+          <div class="qr-hint">👆 แตะที่ QR เพื่อขยายให้ใหญ่ขึ้น</div>
+        </div>
+        <div class="small muted" style="margin-top:8px; word-break:break-all;">ลิงก์เข้าร่วม: <a id="joinLinkText" href="#" target="_blank"></a></div>
+        <div class="col" style="margin-top:10px;">
+          <button type="button" class="btn ghost small" id="togglePublicUrlBtn" style="align-self:flex-start;">🌐 ลิงก์เล่นนอกบ้าน (ถ้าต้องการ)</button>
+          <div id="publicUrlSection" class="col hidden" style="margin-top:8px;">
+            <label class="small muted">ลิงก์สำหรับเล่นนอกบ้าน (ใส่ URL จาก ngrok/cloudflared หรือโดเมนที่ deploy ไว้ แล้วกด "ใช้ลิงก์นี้")</label>
+            <div class="row">
+              <input type="text" id="publicUrlInput" class="grow" placeholder="เช่น https://xxxx.ngrok-free.app">
+              <button class="btn ghost" id="usePublicUrlBtn">ใช้ลิงก์นี้</button>
+            </div>
+            <div id="lanHint" class="small muted"></div>
+          </div>
+        </div>
+      </div>
+      <div class="col" style="flex:1; min-width:220px;">
+        <h3>ผู้เล่นที่เข้าร่วม (<span id="playerCount">0</span>)</h3>
+        <div class="player-list" id="lobbyPlayerList"></div>
+      </div>
+    </div>
+
+    <div class="card col">
+      <h3>คลังเสียง</h3>
+      <div class="tabs">
+        <button class="tab-btn active" data-tab="local">📁 ไฟล์ในเครื่อง (assets/sounds)</button>
+        <button class="tab-btn" data-tab="myinstants">🔗 จาก myinstants.com</button>
+      </div>
+      <div id="tab-local" class="col">
+        <div class="row between">
+          <span class="small muted">วางไฟล์เสียงเพิ่มในโฟลเดอร์ assets/sounds แล้วกดรีเฟรช</span>
+          <button class="btn ghost" id="refreshLibraryBtn">🔄 รีเฟรชคลังเสียง</button>
+        </div>
+      </div>
+      <div id="tab-myinstants" class="col hidden">
+        <div class="row">
+          <input type="text" id="myinstantsUrl" class="grow" placeholder="วางลิงก์หน้าเสียงจาก myinstants.com เช่น https://www.myinstants.com/en/instant/...">
+          <button class="btn secondary" id="addMyinstantsBtn">ดึงเสียง</button>
+        </div>
+        <div id="myinstantsStatus" class="small muted"></div>
+        <p class="small muted">เปิดเว็บ <a href="https://www.myinstants.com/en/categories/memes/th/" target="_blank">myinstants.com/categories/memes/th</a> เพื่อหาเสียงมีมไทย แล้วคัดลอกลิงก์หน้าเสียงมาวาง</p>
+      </div>
+      <div class="sound-list" id="soundList"></div>
+    </div>
+
+    <div class="card col">
+      <h3>ตั้งค่าเกม</h3>
+      <div class="row">
+        <label class="col" style="flex:1;">จำนวนรอบ
+          <input type="number" id="roundsInput" min="1" max="200" value="5">
+        </label>
+        <label class="row" style="gap:6px; align-items:center;">
+          <input type="checkbox" id="shuffleInput" checked style="width:20px;height:20px;">
+          สุ่มลำดับเสียง
+        </label>
+      </div>
+      <div id="setupError" class="small" style="color:var(--danger);"></div>
+      <button class="btn primary big block" id="startGameBtn">🚀 เริ่มเกม</button>
+    </div>
+  </section>
+
+  <!-- LISTEN / RECORD -->
+  <section id="view-listen" class="hidden col">
+    <div class="card center">
+      <div class="muted">รอบที่ <span id="lrRoundIndex">1</span> / <span id="lrTotalRounds">1</span></div>
+      <h2 id="lrSoundName">กำลังโหลดเสียง...</h2>
+      <div class="pulse-ring listening">🔊</div>
+      <p class="muted">ผู้เล่นแต่ละคนกำลังฟังเสียงจากมือถือตัวเอง แล้วเลียนแบบพูดใส่ไมค์</p>
+      <div id="lrWaveGraph"></div>
+      <div class="wavegraph-legend"><span><span class="dot ghost"></span>เสียงต้นฉบับ</span></div>
+      <div class="progressbar" style="margin-top:10px;"><div class="fill" id="lrProgressFill"></div></div>
+      <div class="small muted" id="lrProgressText" style="margin-top:6px;">ส่งเสียงแล้ว 0 / 0 คน</div>
+    </div>
+    <div class="card col">
+      <h3>สถานะผู้เล่น</h3>
+      <div class="player-list" id="listenPlayerList"></div>
+    </div>
+  </section>
+
+  <!-- REVEAL -->
+  <section id="view-reveal" class="hidden col">
+    <div class="card center take-reveal">
+      <div class="muted">เปิดฟังเสียงเลียนแบบ (<span id="revealPos">1</span> / <span id="revealTotal">1</span>)</div>
+      <div class="who" id="revealName">-</div>
+      <audio id="revealAudio" controls style="width:100%; margin:10px 0;"></audio>
+      <div id="revealWaveGraph"></div>
+      <div class="wavegraph-legend">
+        <span><span class="dot ghost"></span>เสียงต้นฉบับ</span>
+        <span><span class="dot live"></span>เสียงเลียนแบบ</span>
+      </div>
+      <div id="revealScoreWrap" class="hidden">
+        <div class="score-big" id="revealScore">0</div>
+        <div class="score-sub">คะแนนความเหมือน (รูปทรงเสียง <span id="revealShape">0</span>% · จังหวะ <span id="revealRhythm">0</span>% · ทำนอง <span id="revealMelody">0</span>%)</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ROUND RESULT -->
+  <section id="view-roundresult" class="hidden col">
+    <div class="card col">
+      <h2 class="center">🏆 สรุปคะแนนรอบที่ <span id="rrRoundIndex">1</span></h2>
+      <div class="player-list" id="roundResultList"></div>
+      <div class="center muted" id="rrCountdown">ไปต่อในอีก... วินาที</div>
+      <button class="btn secondary big block" id="nextRoundBtn">▶️ ไปรอบต่อไปเลย</button>
+    </div>
+  </section>
+
+  <!-- GAME OVER -->
+  <section id="view-gameover" class="hidden col">
+    <div class="card col center">
+      <h2>🎉 จบเกม!</h2>
+      <div id="winnerText" class="score-big" style="font-size:1.8rem;"></div>
+      <div class="player-list" id="finalList" style="text-align:left; margin-top:16px;"></div>
+      <button class="btn primary big block" id="restartBtn" style="margin-top:16px;">🔁 เล่นใหม่ (ตั้งค่าใหม่)</button>
+    </div>
+  </section>
+
+  <footer class="tiny">Mimic Party (fan-made web edition) · ทำเล่นกันเองในกลุ่มเพื่อน</footer>
+</div>
+
+<div id="qrModal" class="qr-modal-backdrop hidden">
+  <div class="qr-modal-card">
+    <img id="qrModalImg" alt="QR เข้าห้อง (ขยายใหญ่)">
+    <div class="qr-modal-code" id="qrModalCode">----</div>
+    <div class="qr-modal-hint">สแกน QR นี้ด้วยมือถือเพื่อเข้าร่วมห้อง · แตะที่ไหนก็ได้เพื่อปิด</div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="/js/wavegraph.js"></script>
+<script src="/js/host.js"></script>

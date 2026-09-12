@@ -1,0 +1,9 @@
+node_modules/
+data/library.json
+data/certs/
+library_cache/sounds/*
+!library_cache/sounds/.gitkeep
+uploads/takes/*
+!uploads/takes/.gitkeep
+npm-debug.log*
+.DS_Store

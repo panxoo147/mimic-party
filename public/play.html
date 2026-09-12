@@ -1,0 +1,127 @@
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mimic Party — เข้าร่วมเกม</title>
+<link rel="stylesheet" href="/css/style.css">
+
+<div class="container">
+  <div class="row between">
+    <h1 style="font-size:1.4rem;">🎤 Mimic Party</h1>
+    <span id="myScoreBadge" class="badge hidden">คะแนน <b id="myScore">0</b></span>
+  </div>
+
+  <!-- JOIN -->
+  <section id="view-join" class="col">
+    <div class="card col">
+      <h2>เข้าร่วมห้อง</h2>
+      <label class="col">รหัสห้อง
+        <input type="text" id="roomCodeInput" maxlength="6" placeholder="เช่น AB3D" style="text-transform:uppercase; font-size:1.4rem; letter-spacing:0.1em; text-align:center;">
+      </label>
+      <label class="col">ชื่อของคุณ
+        <input type="text" id="nameInput" maxlength="24" placeholder="ใส่ชื่อเล่น">
+      </label>
+      <div class="col">
+        <label class="row" style="gap:8px;"><input type="radio" name="role" value="player" checked> 🎤 เล่น (ต้องใช้ไมค์)</label>
+        <label class="row" style="gap:8px;"><input type="radio" name="role" value="observer"> 👀 ดูอย่างเดียว (ไม่ใช้ไมค์)</label>
+      </div>
+      <div id="joinError" class="small" style="color:var(--danger);"></div>
+      <button class="btn primary big block" id="joinBtn">เข้าร่วม</button>
+    </div>
+  </section>
+
+  <!-- LOBBY WAIT -->
+  <section id="view-waiting" class="hidden col">
+    <div class="card center">
+      <h2>เข้าห้องแล้ว! 🎉</h2>
+      <p class="muted">รอ Host เริ่มเกม...</p>
+      <div id="micStatus" class="small"></div>
+      <button class="btn ghost" id="retryMicBtn" style="display:none;">🎙️ ขออนุญาตใช้ไมค์อีกครั้ง</button>
+    </div>
+    <div class="card col">
+      <h3>ผู้เล่นในห้อง</h3>
+      <div class="player-list" id="waitingPlayerList"></div>
+    </div>
+  </section>
+
+  <!-- PLAY (listen -> record -> sent) -->
+  <section id="view-play" class="hidden col">
+    <div class="card center">
+      <div class="muted">รอบที่ <span id="pRoundIndex">1</span> / <span id="pTotalRounds">1</span></div>
+      <div id="pStageListen" class="hidden">
+        <div class="pulse-ring listening">🔊</div>
+        <h2>ฟังให้ดี...</h2>
+        <p class="muted">เดี๋ยวจะเปิดเสียงให้ฟัง แล้วให้เลียนแบบทันที</p>
+        <div id="pListenWaveGraph"></div>
+      </div>
+      <div id="pStageRecord" class="hidden">
+        <div class="pulse-ring">🎙️</div>
+        <h2>เลียนแบบเลย!</h2>
+        <div id="pRecordWaveGraph"></div>
+        <div class="wavegraph-legend"><span><span class="dot ghost"></span>รูปร่างต้นฉบับ (เลียนแบบให้เหมือน)</span></div>
+        <div class="progressbar" style="margin-top:10px;"><div class="fill" id="pRecordFill"></div></div>
+        <div class="small muted" id="pRecordTimer" style="margin-top:6px;"></div>
+      </div>
+      <div id="pStageSent" class="hidden">
+        <div style="font-size:3rem;">✅</div>
+        <h2>ส่งเสียงแล้ว!</h2>
+        <p class="muted">รอเพื่อนคนอื่นเลียนแบบให้เสร็จ...</p>
+      </div>
+      <div id="pStageObserve" class="hidden">
+        <div class="pulse-ring listening">👀</div>
+        <h2>โหมดดูอย่างเดียว</h2>
+        <p class="muted">ฟังเสียงเฉยๆ รอดูผู้เล่นคนอื่นเลียนแบบได้เลย</p>
+      </div>
+      <div id="pStageLate" class="hidden">
+        <div style="font-size:3rem;">⏳</div>
+        <h2>รอบนี้เริ่มไปแล้ว</h2>
+        <p class="muted">เข้าร่วมรอบหน้าได้เลย รอแป๊บนึงนะ</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- REVEAL -->
+  <section id="view-reveal" class="hidden col">
+    <div class="card center take-reveal">
+      <div class="muted">เปิดฟังเสียงเลียนแบบ (<span id="revealPos">1</span> / <span id="revealTotal">1</span>)</div>
+      <div class="who" id="revealName">-</div>
+      <div id="revealYouTag" class="badge player hidden">นี่คือเสียงของคุณ!</div>
+      <div id="revealWaveGraph"></div>
+      <div class="wavegraph-legend">
+        <span><span class="dot ghost"></span>เสียงต้นฉบับ</span>
+        <span><span class="dot live"></span>เสียงเลียนแบบ</span>
+      </div>
+      <div id="revealScoreWrap" class="hidden" style="margin-top:10px;">
+        <div class="score-big" id="revealScore">0</div>
+        <div class="score-sub">คะแนนความเหมือน (รูปทรงเสียง <span id="revealShape">0</span>% · จังหวะ <span id="revealRhythm">0</span>% · ทำนอง <span id="revealMelody">0</span>%)</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ROUND RESULT -->
+  <section id="view-roundresult" class="hidden col">
+    <div class="card col center">
+      <h2>🏆 สรุปคะแนนรอบนี้</h2>
+      <div class="player-list" id="roundResultList"></div>
+      <p class="muted small">รอ Host ไปรอบต่อไป...</p>
+    </div>
+  </section>
+
+  <!-- GAME OVER -->
+  <section id="view-gameover" class="hidden col">
+    <div class="card col center">
+      <h2>🎉 จบเกม!</h2>
+      <div id="winnerText" class="score-big" style="font-size:1.6rem;"></div>
+      <div class="player-list" id="finalList" style="text-align:left; margin-top:16px;"></div>
+    </div>
+  </section>
+
+  <footer class="tiny">Mimic Party (fan-made web edition)</footer>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+<div id="kickedOverlay" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,0.85);display:flex;align-items:center;justify-content:center;z-index:99;">
+  <div class="card center"><h2>คุณถูกเชิญออกจากห้อง</h2></div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="/js/wavegraph.js"></script>
+<script src="/js/play.js"></script>
