@@ -21,6 +21,12 @@ const PITCH_MIN_LAG = Math.round(SAMPLE_RATE / PITCH_MAX_HZ);
 const PITCH_MAX_LAG = Math.round(SAMPLE_RATE / PITCH_MIN_HZ);
 const PITCH_CONF_THRESHOLD = 0.5; // ต้องมั่นใจแค่ไหนถึงจะถือว่าเฟรมนั้น "มีระดับเสียงชัดเจน" (voiced)
 
+// ค่า RMS แบบ "ดิบ" (ก่อน normalize ต่อคลิป) ต่ำกว่านี้ถือว่า "แทบไม่มีเสียงจริงเข้ามาเลย"
+// (แค่ noise floor ของไมค์ เช่น ไม่ได้พูด/ไมค์โดนปิด/สิทธิ์ไมค์มีปัญหา) — ค่านี้ปรับได้ตามจริง
+// เหตุผลที่ต้องเช็คแยกจาก envelope ที่ normalize แล้ว: การ normalize ต่อคลิป (หารด้วยค่าสูงสุดของตัวเอง)
+// ทำให้ต่อให้เป็นแค่ noise เบาๆ กราฟก็จะถูกยืดเต็ม 0-100% เหมือนมีคนพูดจริงอยู่ดี ดูไม่ออกว่า "เงียบ"
+const SILENCE_RAW_RMS_THRESHOLD = 0.0035;
+
 /**
  * ถอดรหัสไฟล์เสียงใดๆ ให้เป็น PCM float32 mono ที่ SAMPLE_RATE
  * คืนค่า { samples: Float32Array, durationMs: number }
@@ -183,6 +189,8 @@ async function analyzeFile(inputPath) {
   const frameSize = Math.max(1, Math.round((SAMPLE_RATE * FRAME_MS) / 1000));
   const rawEnv = rmsEnvelope(samples, frameSize);
   const { freq: rawFreq, confidence: rawConf } = pitchPerFrame(samples, frameSize, rawEnv.length);
+  // ค่าพลังเสียงดิบสูงสุด (ก่อน normalize) ไว้เช็คว่า "มีเสียงจริงเข้ามาไหม" แยกจากรูปทรงที่ normalize แล้ว
+  const peakRaw = rawEnv.length ? Math.max(...rawEnv) : 0;
   const { start, end } = findTrimRange(rawEnv);
 
   const trimmedEnv = Array.from(rawEnv.slice(start, end + 1));
@@ -219,6 +227,8 @@ async function analyzeFile(inputPath) {
     onsets,
     pitch,
     voicedRatio,
+    peakRaw,
+    silent: peakRaw < SILENCE_RAW_RMS_THRESHOLD,
   };
 }
 
@@ -302,8 +312,13 @@ function melodyCorrelation(refPitch, mimicPitch, maxShiftRatio = 0.2) {
  * แต่ถ้าต้นฉบับมีทำนองชัดเจน การพูดมั่วๆ ให้แค่ระดับความดังตรงจังหวะจะไม่พอให้ได้คะแนนเต็มอีกต่อไป
  */
 function scoreAgainstReference(referenceSig, mimicSig) {
-  if (!mimicSig || !mimicSig.envelope || mimicSig.envelope.every((v) => v === 0)) {
-    return { score: 0, shapeScore: 0, rhythmScore: 0, melodyScore: 0 };
+  if (
+    !mimicSig ||
+    !mimicSig.envelope ||
+    mimicSig.envelope.every((v) => v === 0) ||
+    mimicSig.silent // แทบไม่มีเสียงจริงเข้ามาเลย (แค่ noise floor) ไม่ควรได้คะแนนจากการที่ shape สุ่มไปตรงกับต้นฉบับ
+  ) {
+    return { score: 0, shapeScore: 0, rhythmScore: 0, melodyScore: 0, effectivelySilent: true };
   }
 
   const shapeR = bestAlignedCorrelation(referenceSig.envelope, mimicSig.envelope);
@@ -326,7 +341,17 @@ function scoreAgainstReference(referenceSig, mimicSig) {
   const shapeWeight = remaining * 0.7;
   const rhythmWeight = remaining * 0.3;
 
-  const combined = shapeScore01 * shapeWeight + rhythmScore01 * rhythmWeight + melodyScore01 * melodyWeight;
+  // กันเคส "ไม่ได้พูดเข้าไมค์เลย แต่ได้คะแนนเฉยๆ": ถ้าต้นฉบับคาดว่าต้องมีเสียงพูด/ทำนองชัดเจน (melodyApplicable > 0)
+  // แต่การเลียนแบบแทบไม่มีช่วงที่จับโทนเสียง (pitch) ได้เลย (mimicVoicedRatio ต่ำกว่าเกณฑ์) แปลว่าไม่ได้อ้าปากพูดจริงๆ
+  // (แค่เสียงรบกวน/noise รอบข้างที่บังเอิญมี envelope/จังหวะใกล้เคียงต้นฉบับ) ตัดคะแนนรวมทั้งหมดเป็น 0 ไปเลย
+  // ไม่ใช่แค่มิติทำนองมิติเดียว เพราะ shape/rhythm ล้วนๆ ก็ยังถูกสุ่มเข้าให้ตรงโดยบังเอิญได้พอสมควร
+  // ใช้เกณฑ์ตัดขาด (ไม่ใช่ลดสัดส่วน) เพราะ noise ธรรมดาก็มีโอกาสสุ่มผ่าน pitch-confidence ได้ประปรายอยู่แล้ว
+  // การลดคะแนนแบบสัดส่วนจึงยังเหลือคะแนนติดไม้ติดมือ ต้องตัดขาดถึงจะกันได้จริง
+  const VOICE_PRESENCE_MIN = 0.15; // ต่ำกว่านี้ถือว่า "ไม่ได้พูดจริงจัง" เลย (เสียงพูดจริงมักมีสัดส่วนนี้สูงกว่านี้มาก)
+  const mimicVoicedRatio = mimicSig.voicedRatio || 0;
+  const voicePresenceFactor = melodyApplicable > 0 && mimicVoicedRatio < VOICE_PRESENCE_MIN ? 0 : 1;
+
+  const combined = (shapeScore01 * shapeWeight + rhythmScore01 * rhythmWeight + melodyScore01 * melodyWeight) * voicePresenceFactor;
   const score = Math.round(Math.max(0, Math.min(1, combined)) * 100);
 
   return {
@@ -335,6 +360,9 @@ function scoreAgainstReference(referenceSig, mimicSig) {
     rhythmScore: Math.round(rhythmScore01 * 100),
     melodyScore: Math.round(melodyScore01 * 100),
     melodyApplicable: Math.round(melodyApplicable * 100),
+    // ใช้บอกฝั่งแสดงผล (กราฟ/ป้ายกำกับ) ว่า "ไม่ได้พูดจริงจัง" แม้ไมค์จะรับเสียงอะไรเข้ามาบ้างก็ตาม
+    // (ครอบคลุมทั้งเคสเงียบสนิท และเคสมี noise แต่ไม่มีเสียงพูด/ทำนองเลยทั้งที่ต้นฉบับคาดว่าต้องมี)
+    effectivelySilent: voicePresenceFactor === 0,
   };
 }
 
@@ -342,4 +370,5 @@ module.exports = {
   analyzeFile,
   scoreAgainstReference,
   ENVELOPE_POINTS,
+  SILENCE_RAW_RMS_THRESHOLD,
 };

@@ -32,7 +32,9 @@ const ROUND_RESULT_AUTO_MS = 8000;
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { maxHttpBufferSize: 2e7 });
+// ตั้ง ping ให้ถี่ขึ้นกว่าค่า default (25s/20s) เพื่อให้เซิร์ฟเวอร์รู้ไวขึ้นเวลาผู้เล่นปิดเว็บ/หลุดการเชื่อมต่อ
+// โดยไม่ต้องรอนานเกือบ 45 วินาทีเหมือนค่า default (ยังมีกลไก sendBeacon ตอนปิดหน้าเว็บช่วยแจ้งทันทีอีกชั้นด้วย)
+const io = new Server(server, { maxHttpBufferSize: 2e7, pingInterval: 10000, pingTimeout: 8000 });
 
 let httpsServer = null;
 let httpsReady = false;
@@ -50,7 +52,13 @@ const manager = new RoomManager();
 
 // ---------- static & media ----------
 app.use(express.json());
-app.use(express.static(path.join(ROOT, 'public')));
+// ปิด cache ของหน้าเว็บ/ไฟล์ JS/CSS ไว้ก่อน (เกมนี้ยังแก้โค้ดกันบ่อย) กัน browser cache ค้างไฟล์เก่า
+// ทำให้ html รุ่นใหม่กับ js รุ่นเก่า (หรือกลับกัน) ไม่ตรงกันจนอ้างอิง element ที่ไม่มีจริงแล้วพัง
+app.use(express.static(path.join(ROOT, 'public'), {
+  etag: false,
+  lastModified: false,
+  setHeaders: (res) => res.set('Cache-Control', 'no-store'),
+}));
 app.use('/media/sounds', express.static(soundLibrary.LOCAL_SOUNDS_DIR));
 app.use('/media/cache', express.static(soundLibrary.CACHE_SOUNDS_DIR));
 app.use('/media/takes', express.static(UPLOADS_TAKES_DIR));
@@ -129,7 +137,7 @@ async function processSubmission(room, roundIndex, player, filename, filePath) {
     const sig = await analyzeFile(filePath);
     if (room.phase !== PHASES.LISTEN_RECORD || room.roundIndex !== roundIndex) return;
     const soundEntry = room.currentRound.soundEntry;
-    const { score, shapeScore, rhythmScore, melodyScore } = scoreAgainstReference(soundEntry, sig);
+    const { score, shapeScore, rhythmScore, melodyScore, effectivelySilent } = scoreAgainstReference(soundEntry, sig);
     room.currentRound.submissions.set(player.id, {
       url: `/media/takes/${filename}`,
       score,
@@ -138,6 +146,9 @@ async function processSubmission(room, roundIndex, player, filename, filePath) {
       melodyScore,
       durationMs: sig.durationMs,
       envelope: sig.envelope,
+      // ไม่ได้พูดจริงจัง (เงียบสนิท หรือมีแต่ noise ไม่มีเสียงพูด/ทำนองเลยทั้งที่ต้นฉบับคาดว่าต้องมี)
+      // ใช้บอกฝั่งแสดงผลไม่ให้กราฟดูเหมือนมีคนพูดทั้งที่จริงๆ ไม่มี
+      silent: !!effectivelySilent,
       name: player.name,
     });
     broadcastSubmitProgress(room, player);
@@ -146,13 +157,39 @@ async function processSubmission(room, roundIndex, player, filename, filePath) {
     console.error('[submit] วิเคราะห์เสียงล้มเหลว:', err.message);
     if (room.phase === PHASES.LISTEN_RECORD && room.roundIndex === roundIndex) {
       room.currentRound.submissions.set(player.id, {
-        url: null, score: 0, shapeScore: 0, rhythmScore: 0, melodyScore: 0, envelope: null, name: player.name, failed: true,
+        url: null, score: 0, shapeScore: 0, rhythmScore: 0, melodyScore: 0, envelope: null, silent: true, name: player.name, failed: true,
       });
       broadcastSubmitProgress(room, player);
       finishRoundIfReady(room);
     }
   }
 }
+
+// ผู้เล่นปิดแท็บ/เบราว์เซอร์ — ฝั่ง client ใช้ navigator.sendBeacon ยิงมาบอกตอนหน้าเว็บกำลังจะปิด (pagehide)
+// เพื่อให้เซิร์ฟเวอร์รู้ทันทีว่าออกจากห้องแล้ว ไม่ต้องรอ socket.io ตรวจจับการหลุดการเชื่อมต่อเอง (ซึ่งอาจช้าถึงหลักสิบวินาที
+// โดยเฉพาะบนมือถือที่ปิดแอป/ปิดแท็บแล้วระบบปฏิบัติการอาจไม่ปิด connection ให้ทันที)
+// หมายเหตุ: req.body ถูก parse ให้แล้วโดย express.json() middleware ตัวกลาง (บรรทัดบนสุดของไฟล์)
+// ฝั่ง client ต้องส่งมาเป็น Blob ชนิด 'application/json' (ดู public/js/play.js) ไม่งั้น body parser จะไม่ทำงาน
+app.post('/api/rooms/:code/leave', (req, res) => {
+  const room = manager.get(req.params.code);
+  if (!room) return res.status(204).end();
+  const playerId = req.body && req.body.playerId;
+  if (playerId) {
+    const player = room.getPlayerById(playerId);
+    if (player) {
+      if (room.phase === PHASES.LOBBY) {
+        // ยังไม่เริ่มเกม — เอาออกจากลิสต์ไปเลยเพื่อไม่ให้ค้างรก ไม่กระทบคะแนนอะไรอยู่แล้ว
+        room.removePlayer(playerId);
+      } else {
+        // เริ่มเกมไปแล้ว — แค่ทำเครื่องหมายว่าหลุดการเชื่อมต่อ (เก็บคะแนนไว้ เผื่อกลับมาต่อได้)
+        player.connected = false;
+      }
+      emitState(room);
+      finishRoundIfReady(room);
+    }
+  }
+  res.status(204).end();
+});
 
 function broadcastSubmitProgress(room, player) {
   io.to(room.code).emit('round:submitted', {
@@ -252,7 +289,7 @@ function forceFinishRound(room, roundIndex) {
   for (const p of requiredPlayersFor(room)) {
     if (!room.currentRound.submissions.has(p.id)) {
       room.currentRound.submissions.set(p.id, {
-        url: null, score: 0, shapeScore: 0, rhythmScore: 0, melodyScore: 0, envelope: null, name: p.name, timedOut: true,
+        url: null, score: 0, shapeScore: 0, rhythmScore: 0, melodyScore: 0, envelope: null, silent: true, name: p.name, timedOut: true,
       });
     }
   }
@@ -293,6 +330,7 @@ function scheduleNextReveal(room) {
     melodyScore: take.melodyScore,
     envelope: take.envelope || null,
     referenceEnvelope: room.currentRound.soundEntry.envelope,
+    silent: !!take.silent,
     timedOut: !!take.timedOut,
     failed: !!take.failed,
   });
@@ -374,6 +412,19 @@ io.on('connection', (socket) => {
   socket.on('host:add_myinstants', async ({ url } = {}, cb) => {
     try {
       const entry = await soundLibrary.addFromMyInstants(url);
+      cb && cb({ ok: true, entry });
+    } catch (err) {
+      cb && cb({ ok: false, error: err.message });
+    }
+  });
+
+  // อัปโหลดไฟล์เสียงจากเครื่อง host แบบลาก-วาง/เลือกไฟล์ (ไม่ต้องไปก็อปลง assets/sounds เอง)
+  // ส่งเป็นไฟล์ไบนารีตรงๆ ผ่าน socket.io (ขนาดไฟล์ถูกจำกัดโดย maxHttpBufferSize ของ io ด้านบน)
+  socket.on('host:upload_sound', async ({ filename, data } = {}, cb) => {
+    try {
+      if (!filename || !data) throw new Error('ไม่มีข้อมูลไฟล์');
+      const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+      const entry = await soundLibrary.addLocalFile(filename, buffer);
       cb && cb({ ok: true, entry });
     } catch (err) {
       cb && cb({ ok: false, error: err.message });

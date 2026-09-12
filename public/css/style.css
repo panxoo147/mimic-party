@@ -88,6 +88,8 @@ a { color: var(--accent3); }
 .btn.danger { background: linear-gradient(180deg, var(--danger), #b53434); color: #fff; }
 .btn.block { width: 100%; }
 .btn.big { padding: 22px 28px; font-size: 1.3rem; border-radius: 20px; }
+.btn.small { padding: 8px 14px; font-size: 0.82rem; border-radius: 10px; box-shadow: 0 4px 0 rgba(0,0,0,0.25); }
+.btn.small:active { transform: translateY(3px); box-shadow: 0 1px 0 rgba(0,0,0,0.25); }
 
 input[type=text], input[type=number], select {
   font-family: inherit;
@@ -208,19 +210,86 @@ input[type=text]:focus, input[type=number]:focus { border-color: var(--accent2);
 .rank-2 { border-left: 4px solid silver; }
 .rank-3 { border-left: 4px solid #cd7f32; }
 
-.sound-list { display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow-y: auto; }
+/* ---------- คลังเสียง: toolbar ค้นหา/เลือกทั้งหมด ---------- */
+.tab-count { font-size: 0.72rem; opacity: 0.7; font-weight: 400; margin-left: 2px; }
+.sound-toolbar { align-items: center; }
+.sound-toolbar input[type=text] { padding: 10px 14px; min-width: 160px; }
+
+/* ---------- คลังเสียง: โซนลาก-วางไฟล์ ---------- */
+.sound-dropzone {
+  border: 2px dashed rgba(255,255,255,0.22);
+  border-radius: 16px;
+  padding: 20px 16px;
+  text-align: center;
+  cursor: pointer;
+  background: rgba(255,255,255,0.02);
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.08s ease;
+}
+.sound-dropzone:hover, .sound-dropzone:focus-visible {
+  border-color: rgba(255,255,255,0.4);
+  background: rgba(255,255,255,0.05);
+  outline: none;
+}
+.sound-dropzone.dragover {
+  border-color: var(--accent3);
+  background: rgba(52,224,161,0.12);
+  transform: scale(1.01);
+}
+.sound-dropzone-icon { font-size: 1.8rem; margin-bottom: 4px; }
+.sound-dropzone-text { font-weight: 600; margin-bottom: 4px; }
+.sound-dropzone-link { color: var(--accent3); text-decoration: underline; }
+
+/* ---------- คลังเสียง: รายการเสียง ---------- */
+.sound-list { display: flex; flex-direction: column; gap: 8px; max-height: 360px; overflow-y: auto; padding-right: 2px; }
 .sound-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  background: rgba(255,255,255,0.05);
-  border-radius: 12px;
-  padding: 10px 12px;
+  gap: 12px;
+  background: rgba(255,255,255,0.045);
+  border-radius: 14px;
+  padding: 10px 14px;
+  border: 2px solid transparent;
+  border-left: 4px solid transparent;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
 }
-.sound-item.selected { outline: 2px solid var(--accent3); }
-.sound-item .meta { flex: 1; min-width: 0; }
+.sound-item:hover { background: rgba(255,255,255,0.08); }
+.sound-item.selected {
+  background: rgba(52,224,161,0.10);
+  border-left-color: var(--accent3);
+  border-color: rgba(52,224,161,0.22);
+}
+.sound-item .sound-checkbox {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  accent-color: var(--accent3);
+  cursor: pointer;
+}
+.sound-item .sound-icon { font-size: 1.25rem; flex-shrink: 0; }
+.sound-item .meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .sound-item .meta .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sound-item .meta .src { color: var(--text-dim); font-size: 0.78rem; }
+.sound-badges { display: flex; gap: 6px; flex-wrap: wrap; }
+.sound-badge {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  background: rgba(255,255,255,0.07);
+  padding: 2px 9px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.sound-item .sound-audio { height: 32px; max-width: 160px; flex-shrink: 0; cursor: default; }
+.sound-item [data-remove] { cursor: pointer; }
+.sound-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 30px 10px;
+  color: var(--text-dim);
+  text-align: center;
+}
+.sound-empty .icon { font-size: 2rem; }
 
 .big-timer {
   font-size: 4.5rem;

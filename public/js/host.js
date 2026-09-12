@@ -15,6 +15,16 @@
   const $ = (id) => document.getElementById(id);
   const views = ['lobby', 'listen', 'reveal', 'roundresult', 'gameover'];
 
+  // ผูก event ให้ปลอดภัย: ถ้า HTML กับ JS ไม่ตรงเวอร์ชันกัน (เช่นแคชเบราว์เซอร์เก่าค้างอยู่)
+  // จะแค่เตือนใน console แล้วข้ามไป แทนที่จะโยน error กลางไฟล์จนโค้ดส่วนที่เหลือด้านล่าง
+  // (เช่น socket.on ทั้งหมด) ไม่ถูกรันเลย ทำให้ทั้งแอปค้าง
+  function on(id, event, handler) {
+    const el = $(id);
+    if (el) el.addEventListener(event, handler);
+    else console.warn(`[mimic-party] ไม่พบ element id="${id}" — ลองรีเฟรชหน้าแบบ hard refresh (Ctrl+Shift+R) เผื่อไฟล์แคชเก่าค้างอยู่`);
+    return el;
+  }
+
   function showView(name) {
     views.forEach((v) => $(`view-${v}`).classList.toggle('hidden', v !== name));
   }
@@ -28,7 +38,7 @@
   }
 
   // ---------- tap gate (ปลดล็อกการเล่นเสียงอัตโนมัติของเบราว์เซอร์) ----------
-  $('tapGateBtn').addEventListener('click', () => {
+  on('tapGateBtn', 'click', () => {
     const a = new Audio();
     a.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
     a.play().catch(() => {});
@@ -56,41 +66,51 @@
   function refreshQr() {
     if (!roomCode) return;
     currentJoinUrl = computeJoinUrl();
-    $('qrImg').src = `/api/qrcode?text=${encodeURIComponent(currentJoinUrl)}`;
-    $('joinLinkText').textContent = currentJoinUrl;
-    $('joinLinkText').href = currentJoinUrl;
-    if (!$('qrModal').classList.contains('hidden')) openQrModal(); // อัปเดตรูปในโมดัลด้วยถ้าเปิดค้างอยู่
+    const qrImg = $('qrImg');
+    if (qrImg) qrImg.src = `/api/qrcode?text=${encodeURIComponent(currentJoinUrl)}`;
+    const joinLinkText = $('joinLinkText');
+    if (joinLinkText) { joinLinkText.textContent = currentJoinUrl; joinLinkText.href = currentJoinUrl; }
+    const qrModalEl = $('qrModal');
+    if (qrModalEl && !qrModalEl.classList.contains('hidden')) openQrModal(); // อัปเดตรูปในโมดัลด้วยถ้าเปิดค้างอยู่
   }
 
   function openQrModal() {
     if (!currentJoinUrl) return;
-    $('qrModalImg').src = `/api/qrcode?text=${encodeURIComponent(currentJoinUrl)}&size=640`;
-    $('qrModalCode').textContent = roomCode || '----';
-    $('qrModal').classList.remove('hidden');
+    const qrModalImg = $('qrModalImg');
+    if (qrModalImg) qrModalImg.src = `/api/qrcode?text=${encodeURIComponent(currentJoinUrl)}&size=640`;
+    const qrModalCode = $('qrModalCode');
+    if (qrModalCode) qrModalCode.textContent = roomCode || '----';
+    const qrModalEl = $('qrModal');
+    if (qrModalEl) qrModalEl.classList.remove('hidden');
   }
   function closeQrModal() {
-    $('qrModal').classList.add('hidden');
+    const qrModalEl = $('qrModal');
+    if (qrModalEl) qrModalEl.classList.add('hidden');
   }
-  $('qrWrap').addEventListener('click', openQrModal);
-  $('qrWrap').addEventListener('keydown', (e) => {
+  on('qrWrap', 'click', openQrModal);
+  on('qrWrap', 'keydown', (e) => {
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openQrModal(); }
   });
-  $('qrModal').addEventListener('click', closeQrModal);
+  on('qrModal', 'click', closeQrModal);
 
-  $('usePublicUrlBtn').addEventListener('click', () => {
-    const v = $('publicUrlInput').value.trim();
+  on('usePublicUrlBtn', 'click', () => {
+    const input = $('publicUrlInput');
+    const v = input ? input.value.trim() : '';
     if (v) localStorage.setItem('mp_public_url', v);
     else localStorage.removeItem('mp_public_url');
     refreshQr();
   });
 
   function setPublicUrlSectionOpen(open) {
-    $('publicUrlSection').classList.toggle('hidden', !open);
-    $('togglePublicUrlBtn').textContent = open ? '🔼 ซ่อนส่วนนี้' : '🌐 ลิงก์เล่นนอกบ้าน (ถ้าต้องการ)';
+    const section = $('publicUrlSection');
+    if (section) section.classList.toggle('hidden', !open);
+    const btn = $('togglePublicUrlBtn');
+    if (btn) btn.textContent = open ? '🔼 ซ่อนส่วนนี้' : '🌐 ลิงก์เล่นนอกบ้าน (ถ้าต้องการ)';
     localStorage.setItem('mp_publicurl_open', open ? '1' : '0');
   }
-  $('togglePublicUrlBtn').addEventListener('click', () => {
-    setPublicUrlSectionOpen($('publicUrlSection').classList.contains('hidden'));
+  on('togglePublicUrlBtn', 'click', () => {
+    const section = $('publicUrlSection');
+    setPublicUrlSectionOpen(section ? section.classList.contains('hidden') : true);
   });
 
   function checkLanHint() {
@@ -109,7 +129,8 @@
       msg += info.httpsReady
         ? `🔒 ลิงก์เข้าร่วมด้านบนใช้ HTTPS แล้ว (จำเป็นสำหรับเบราว์เซอร์ถึงจะขอสิทธิ์ไมค์ได้) — เบราว์เซอร์ของผู้เล่นอาจเตือนว่าใบรับรองไม่น่าเชื่อถือ ให้กด "Advanced" แล้ว "Proceed anyway" ได้เลย เพราะเราออกใบรับรองเองสำหรับเล่นในวง LAN`
         : `⚠️ เซิร์ฟเวอร์นี้เปิด HTTPS ไม่สำเร็จ ผู้เล่น (ที่ไม่ใช่ observer) อาจขอสิทธิ์ไมค์ผ่าน LAN ไม่ได้ — แนะนำใส่ลิงก์สาธารณะจาก ngrok/cloudflared ด้านบนแทน (ดู README)`;
-      $('lanHint').innerHTML = msg;
+      const lanHintEl = $('lanHint');
+      if (lanHintEl) lanHintEl.innerHTML = msg;
       refreshQr();
     }).catch(() => {});
   }
@@ -118,7 +139,8 @@
   function init() {
     const saved = JSON.parse(localStorage.getItem('mp_host') || 'null');
     const publicUrlSaved = localStorage.getItem('mp_public_url');
-    if (publicUrlSaved) $('publicUrlInput').value = publicUrlSaved;
+    const publicUrlInputEl = $('publicUrlInput');
+    if (publicUrlSaved && publicUrlInputEl) publicUrlInputEl.value = publicUrlSaved;
     const openSaved = localStorage.getItem('mp_publicurl_open');
     setPublicUrlSectionOpen(openSaved === '1' || (openSaved === null && !!publicUrlSaved));
 
@@ -158,12 +180,18 @@
   }
 
   // ---------- คลังเสียง ----------
+  let soundSearchQuery = '';
   document.querySelectorAll('.tab-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
       currentTab = btn.dataset.tab;
       document.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b === btn));
       $('tab-local').classList.toggle('hidden', currentTab !== 'local');
       $('tab-myinstants').classList.toggle('hidden', currentTab !== 'myinstants');
+      // สลับแท็บแล้วล้างคำค้นหาเดิม กันสับสนว่าทำไมแท็บใหม่ดูว่างเปล่า (คำค้นหาเก่าอาจไม่ match อะไรเลยในแท็บนี้)
+      soundSearchQuery = '';
+      const searchInput = $('soundSearchInput');
+      if (searchInput) searchInput.value = '';
+      renderLibrary();
     });
   });
 
@@ -178,20 +206,127 @@
     });
   }
 
-  $('refreshLibraryBtn').addEventListener('click', loadLibrary);
+  on('refreshLibraryBtn', 'click', loadLibrary);
 
-  $('addMyinstantsBtn').addEventListener('click', () => {
-    const url = $('myinstantsUrl').value.trim();
+  on('soundSearchInput', 'input', (e) => {
+    soundSearchQuery = e.target.value.trim().toLowerCase();
+    renderLibrary();
+  });
+
+  function visibleLibraryEntries() {
+    const wantSource = currentTab === 'local' ? 'local' : 'myinstants';
+    let list = libraryList.filter((e) => e.source === wantSource);
+    if (wantSource === 'local') {
+      list = [...list].sort((a, b) => a.name.localeCompare(b.name, 'th'));
+    }
+    if (soundSearchQuery) {
+      list = list.filter((e) => e.name.toLowerCase().includes(soundSearchQuery));
+    }
+    return list;
+  }
+
+  on('selectAllBtn', 'click', () => {
+    visibleLibraryEntries().forEach((e) => selectedIds.add(e.id));
+    renderLibrary();
+  });
+  on('clearSelectionBtn', 'click', () => {
+    selectedIds.clear();
+    renderLibrary();
+  });
+
+  function updateSelectedCount() {
+    const el = $('selectedCountText');
+    if (el) el.textContent = `เลือกไว้ ${selectedIds.size} เสียง`;
+  }
+
+  // ---------- ลาก-วางไฟล์เสียง / เลือกไฟล์จากเครื่อง ----------
+  const AUDIO_EXT_CLIENT = ['.mp3', '.wav', '.ogg', '.m4a', '.webm', '.flac'];
+  function isAudioFile(file) {
+    if (file.type && file.type.startsWith('audio/')) return true;
+    const lower = file.name.toLowerCase();
+    return AUDIO_EXT_CLIENT.some((ext) => lower.endsWith(ext));
+  }
+
+  function setUploadStatus(msg) {
+    const el = $('uploadStatus');
+    if (!el) return;
+    if (!msg) { el.classList.add('hidden'); el.textContent = ''; }
+    else { el.classList.remove('hidden'); el.textContent = msg; }
+  }
+
+  function uploadOneFile(file) {
+    return file.arrayBuffer().then((buf) => new Promise((resolve) => {
+      socket.emit('host:upload_sound', { filename: file.name, data: buf }, (res) => resolve({ file, res }));
+    })).catch((err) => ({ file, res: { ok: false, error: err.message } }));
+  }
+
+  async function handleFilesDropped(fileList) {
+    const files = Array.from(fileList || []).filter(isAudioFile);
+    if (files.length === 0) {
+      toast('ไม่พบไฟล์เสียงที่รองรับ (mp3/wav/ogg/m4a/webm/flac)');
+      return;
+    }
+    let okCount = 0;
+    const failed = [];
+    for (let i = 0; i < files.length; i++) {
+      setUploadStatus(`⬆️ กำลังอัปโหลด ${i + 1}/${files.length}: ${files[i].name}`);
+      const { file, res } = await uploadOneFile(files[i]);
+      if (res && res.ok) {
+        okCount++;
+        selectedIds.add(res.entry.id);
+      } else {
+        failed.push(`${file.name} (${(res && res.error) || 'ไม่ทราบสาเหตุ'})`);
+      }
+    }
+    if (okCount > 0) {
+      setUploadStatus(`✅ อัปโหลดสำเร็จ ${okCount}/${files.length} ไฟล์`);
+      loadLibrary();
+      setTimeout(() => setUploadStatus(null), 4000);
+    } else {
+      setUploadStatus(null);
+    }
+    if (failed.length) toast('อัปโหลดไม่สำเร็จ: ' + failed.join(', '));
+  }
+
+  const dropzoneEl = $('soundDropzone');
+  const soundFileInputEl = $('soundFileInput');
+  if (dropzoneEl && soundFileInputEl) {
+    dropzoneEl.addEventListener('click', () => soundFileInputEl.click());
+    dropzoneEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); soundFileInputEl.click(); }
+    });
+    ['dragenter', 'dragover'].forEach((evt) => {
+      dropzoneEl.addEventListener(evt, (e) => { e.preventDefault(); e.stopPropagation(); dropzoneEl.classList.add('dragover'); });
+    });
+    ['dragleave', 'dragend'].forEach((evt) => {
+      dropzoneEl.addEventListener(evt, (e) => { e.preventDefault(); e.stopPropagation(); dropzoneEl.classList.remove('dragover'); });
+    });
+    dropzoneEl.addEventListener('drop', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropzoneEl.classList.remove('dragover');
+      handleFilesDropped(e.dataTransfer && e.dataTransfer.files);
+    });
+    soundFileInputEl.addEventListener('change', () => {
+      handleFilesDropped(soundFileInputEl.files);
+      soundFileInputEl.value = '';
+    });
+  }
+
+  on('addMyinstantsBtn', 'click', () => {
+    const urlInput = $('myinstantsUrl');
+    const url = urlInput ? urlInput.value.trim() : '';
     if (!url) return;
-    $('myinstantsStatus').textContent = 'กำลังดึงเสียง...';
+    const statusEl = $('myinstantsStatus');
+    if (statusEl) statusEl.textContent = 'กำลังดึงเสียง...';
     socket.emit('host:add_myinstants', { url }, (res) => {
       if (res.ok) {
-        $('myinstantsStatus').textContent = `เพิ่ม "${res.entry.name}" แล้ว ✅`;
-        $('myinstantsUrl').value = '';
+        if (statusEl) statusEl.textContent = `เพิ่ม "${res.entry.name}" แล้ว ✅`;
+        if (urlInput) urlInput.value = '';
         selectedIds.add(res.entry.id);
         loadLibrary();
       } else {
-        $('myinstantsStatus').textContent = '❌ ' + res.error;
+        if (statusEl) statusEl.textContent = '❌ ' + res.error;
       }
     });
   });
@@ -204,30 +339,67 @@
   function renderLibrary() {
     const list = $('soundList');
     list.innerHTML = '';
-    if (libraryList.length === 0) {
-      list.innerHTML = '<div class="muted small">ยังไม่มีเสียงในคลัง ลองวางไฟล์ลง assets/sounds หรือดึงจาก myinstants.com</div>';
+
+    const localCount = libraryList.filter((e) => e.source === 'local').length;
+    const myinstantsCount = libraryList.filter((e) => e.source === 'myinstants').length;
+    const tabCountLocalEl = $('tabCountLocal');
+    if (tabCountLocalEl) tabCountLocalEl.textContent = `(${localCount})`;
+    const tabCountMyinstantsEl = $('tabCountMyinstants');
+    if (tabCountMyinstantsEl) tabCountMyinstantsEl.textContent = `(${myinstantsCount})`;
+    updateSelectedCount();
+
+    const entries = visibleLibraryEntries();
+
+    if (entries.length === 0) {
+      const totalInTab = currentTab === 'local' ? localCount : myinstantsCount;
+      if (totalInTab === 0) {
+        list.innerHTML = currentTab === 'local'
+          ? '<div class="sound-empty"><div class="icon">📁</div><div>ยังไม่มีไฟล์เสียงในเครื่อง</div><div class="small">ลากไฟล์ .mp3 มาวางด้านบน หรือวางไฟล์ในโฟลเดอร์ assets/sounds แล้วกดรีเฟรช</div></div>'
+          : '<div class="sound-empty"><div class="icon">🔗</div><div>ยังไม่มีเสียงจาก myinstants.com</div><div class="small">วางลิงก์เสียงด้านบนแล้วกด "ดึงเสียง"</div></div>';
+      } else {
+        list.innerHTML = '<div class="sound-empty"><div class="icon">🔍</div><div>ไม่พบเสียงที่ตรงกับคำค้นหา</div></div>';
+      }
       return;
     }
-    libraryList.forEach((entry) => {
+
+    entries.forEach((entry) => {
       const el = document.createElement('div');
       el.className = 'sound-item' + (selectedIds.has(entry.id) ? ' selected' : '');
       el.innerHTML = `
-        <input type="checkbox" ${selectedIds.has(entry.id) ? 'checked' : ''} style="width:20px;height:20px;">
+        <input type="checkbox" class="sound-checkbox" ${selectedIds.has(entry.id) ? 'checked' : ''}>
+        <div class="sound-icon">${entry.source === 'local' ? '📁' : '🔗'}</div>
         <div class="meta">
           <div class="name">${escapeHtml(entry.name)}</div>
-          <div class="src">${entry.source === 'local' ? '📁 ไฟล์ในเครื่อง' : '🔗 myinstants.com'} · ${fmtDuration(entry.durationMs)}</div>
+          <div class="sound-badges">
+            <span class="sound-badge">⏱ ${fmtDuration(entry.durationMs)}</span>
+            <span class="sound-badge">${entry.source === 'local' ? 'ไฟล์ในเครื่อง' : 'myinstants.com'}</span>
+          </div>
         </div>
-        <audio controls preload="none" src="${entry.source === 'local' ? '/media/sounds/' : '/media/cache/'}${encodeURIComponent(basename(entry.relPath))}" style="height:32px; max-width:140px;"></audio>
-        ${entry.source === 'myinstants' ? '<button class="btn ghost small" data-remove="' + entry.id + '">ลบ</button>' : ''}
+        <audio class="sound-audio" controls preload="none" src="${entry.source === 'local' ? '/media/sounds/' : '/media/cache/'}${encodeURIComponent(basename(entry.relPath))}"></audio>
+        ${entry.source === 'myinstants' ? '<button type="button" class="btn ghost small" data-remove="' + entry.id + '">ลบ</button>' : ''}
       `;
-      const cb = el.querySelector('input[type=checkbox]');
+      const cb = el.querySelector('.sound-checkbox');
+      function toggle() {
+        cb.checked = !cb.checked;
+        if (cb.checked) selectedIds.add(entry.id); else selectedIds.delete(entry.id);
+        el.classList.toggle('selected', cb.checked);
+        updateSelectedCount();
+      }
+      cb.addEventListener('click', (e) => e.stopPropagation()); // กัน double-toggle กับ click ที่ el ด้านล่าง
       cb.addEventListener('change', () => {
         if (cb.checked) selectedIds.add(entry.id); else selectedIds.delete(entry.id);
         el.classList.toggle('selected', cb.checked);
+        updateSelectedCount();
+      });
+      // แตะที่แถวตรงไหนก็ได้เพื่อเลือก/ไม่เลือก ยกเว้นตัวเล่นเสียงกับปุ่มลบ (ให้กดใช้งานได้ตามปกติ)
+      el.addEventListener('click', (e) => {
+        if (e.target.closest('audio, [data-remove]')) return;
+        toggle();
       });
       const rmBtn = el.querySelector('[data-remove]');
       if (rmBtn) {
-        rmBtn.addEventListener('click', () => {
+        rmBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
           socket.emit('host:remove_sound', { id: entry.id }, () => { selectedIds.delete(entry.id); loadLibrary(); });
         });
       }
@@ -235,11 +407,13 @@
     });
   }
 
-  function basename(p) { return p.split('/').pop(); }
+  // หมายเหตุ: บน Windows path.relative() ฝั่ง server จะคืนค่ามาเป็น backslash (\) เช่น "assets\sounds\quack.mp3"
+  // ถ้า split แค่ '/' อย่างเดียวจะไม่ตัดโฟลเดอร์ออก ทำให้ src ของ <audio> ผิด (404) กลายเป็นไม่มีเสียงตอนพรีวิว
+  function basename(p) { return (p || '').split(/[\\/]/).pop(); }
   function escapeHtml(s) { return (s || '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
   // ---------- เริ่มเกม ----------
-  $('startGameBtn').addEventListener('click', () => {
+  on('startGameBtn', 'click', () => {
     $('setupError').textContent = '';
     const rounds = parseInt($('roundsInput').value, 10) || 1;
     const shuffle = $('shuffleInput').checked;
@@ -334,14 +508,17 @@
     });
   }
 
-  $('nextRoundBtn').addEventListener('click', () => {
+  on('nextRoundBtn', 'click', () => {
     clearInterval(roundResultTimer);
     socket.emit('host:next_round', {}, () => {});
   });
 
-  $('restartBtn').addEventListener('click', () => {
+  on('restartBtn', 'click', () => {
     socket.emit('host:restart', {}, (res) => {
-      if (res.ok) { selectedIds = new Set(); }
+      // ไม่ล้างเสียงที่เลือกไว้แล้ว เผื่อกลุ่มเดิมอยากเล่นซ้ำด้วยชุดเสียงเดิม ไม่ต้องมาติ๊กเลือกใหม่ทุกรอบ
+      // (เดิมโค้ดล้าง selectedIds ทิ้งตรงนี้ แต่ไม่ได้ re-render รายการ ทำให้ checkbox ในหน้าจอยังติ๊กค้างอยู่
+      //  ทั้งที่จริงๆ ค่าที่เลือกไว้ในระบบถูกล้างไปแล้ว กดเริ่มเกมเลยฟ้อง "กรุณาเลือกเสียง" ทั้งที่ติ๊กไว้เต็มไปหมด)
+      if (res.ok) renderLibrary();
     });
   });
 
@@ -372,7 +549,7 @@
     showView('reveal');
     $('revealPos').textContent = data.index + 1;
     $('revealTotal').textContent = data.total;
-    $('revealName').textContent = data.timedOut ? `${data.name} (หมดเวลา ⏱️)` : `🎙️ ${data.name}`;
+    $('revealName').textContent = data.timedOut ? `${data.name} (หมดเวลา ⏱️)` : `🎙️ ${data.name}${data.silent ? ' 🔇 (ไม่มีเสียงพูด)' : ''}`;
     $('revealScoreWrap').classList.add('hidden');
     if (revealWave) {
       revealWave.setGhost(data.referenceEnvelope);
@@ -391,7 +568,9 @@
       $('revealRhythm').textContent = data.rhythmScore;
       $('revealMelody').textContent = data.melodyScore;
       $('revealScoreWrap').classList.remove('hidden');
-      if (revealWave) revealWave.setLive(data.envelope);
+      // ถ้าไม่มีเสียงพูดจริงๆ (silent) ไม่โชว์กราฟ envelope ที่ normalize มาแล้ว เพราะจะดูเหมือนมีคนพูดทั้งที่ไม่มี
+      // (envelope normalize ต่อคลิปเสมอ ต่อให้เป็นแค่ noise เบาๆ กราฟก็จะยืดเต็มความสูงเหมือนมีคนพูดจริง)
+      if (revealWave) revealWave.setLive(data.silent ? null : data.envelope);
     };
     if (data.url) {
       audioEl.onended = reveal;

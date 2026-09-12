@@ -285,7 +285,7 @@
     showView('reveal');
     $('revealPos').textContent = data.index + 1;
     $('revealTotal').textContent = data.total;
-    $('revealName').textContent = data.timedOut ? `${data.name} (หมดเวลา ⏱️)` : `🎙️ ${data.name}`;
+    $('revealName').textContent = data.timedOut ? `${data.name} (หมดเวลา ⏱️)` : `🎙️ ${data.name}${data.silent ? ' 🔇 (ไม่มีเสียงพูด)' : ''}`;
     $('revealYouTag').classList.toggle('hidden', !(me && data.playerId === me.id));
     $('revealScoreWrap').classList.add('hidden');
     pRevealWave.setGhost(data.referenceEnvelope);
@@ -300,7 +300,8 @@
       $('revealRhythm').textContent = data.rhythmScore;
       $('revealMelody').textContent = data.melodyScore;
       $('revealScoreWrap').classList.remove('hidden');
-      pRevealWave.setLive(data.envelope);
+      // ไม่มีเสียงพูดจริงๆ ก็ไม่โชว์กราฟที่ normalize มาแล้ว (จะดูเหมือนมีคนพูดทั้งที่ไม่มี)
+      pRevealWave.setLive(data.silent ? null : data.envelope);
     }, data.url ? 1200 : 400);
   });
 
@@ -322,4 +323,17 @@
       });
     }
   });
+
+  // แจ้งเซิร์ฟเวอร์ทันทีตอนกำลังปิดหน้าเว็บ/แท็บ (แทนที่จะปล่อยให้ socket.io ต้องรอตรวจจับการหลุดการเชื่อมต่อเอง
+  // ซึ่งอาจช้าถึงหลักสิบวินาที โดยเฉพาะตอนปิดแอป/สลับแอปบนมือถือ) ใช้ sendBeacon เพราะทำงานได้แม้หน้าเว็บกำลังจะปิดไปแล้ว
+  function notifyLeaving() {
+    if (!roomCode || !me || !navigator.sendBeacon) return;
+    try {
+      const blob = new Blob([JSON.stringify({ playerId: me.id })], { type: 'application/json' });
+      navigator.sendBeacon(`/api/rooms/${roomCode}/leave`, blob);
+    } catch {
+      // เพิกเฉย ปล่อยให้ socket.io ตรวจจับการหลุดการเชื่อมต่อตามปกติแทน
+    }
+  }
+  window.addEventListener('pagehide', notifyLeaving);
 })();

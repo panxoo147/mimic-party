@@ -11,7 +11,8 @@
    *  - setGhost(envelopeArray|null)   วาดเงาแท่ง "ต้นฉบับ" ไว้ข้างหลัง (โปร่งแสง)
    *  - setLive(envelopeArray|null)    วาดแท่ง "ของจริง" ทับด้านหน้า (ใช้ตอนเฉลยผล)
    *  - reset()                        เคลียร์กราฟให้แบนราบ เตรียมอัดใหม่
-   *  - pushLive(value 0..1)           กราฟสไตล์ VU-meter สด: ดันค่าล่าสุดเข้ามาทีละแท่ง (ใช้ตอนกำลังอัดเสียง)
+   *  - pushLive(value 0..1)           กราฟสไตล์ VU-meter สด: เติมแท่งถัดไปจากซ้ายไปขวาไปเรื่อยๆ ตามเวลาที่อัดไป (ใช้ตอนกำลังอัดเสียง)
+   *                                    ให้ตำแหน่งแท่งตรงกับสัดส่วนเวลาเดียวกับกราฟเงาต้นฉบับ (ซ้าย=เริ่มอัด ขวา=จบการอัด)
    *  - highlightUpTo(ratio 0..1)      ไฮไลต์แท่งตามสัดส่วนเวลาที่เล่นไปแล้ว (ใช้ตอนฟังเสียงต้นฉบับ)
    */
   function createWaveGraph(container, opts = {}) {
@@ -59,18 +60,17 @@
       liveBars.forEach((b) => { b.style.height = '4%'; b.classList.add('pending'); });
     }
 
-    // สำหรับกราฟสด (ตอนอัดเสียง): เลื่อนค่าทั้งหมดไปทางซ้าย แล้วเติมค่าล่าสุดที่ขวาสุด
-    let liveValues = new Array(barCount).fill(0);
+    // สำหรับกราฟสด (ตอนอัดเสียง): เติมแท่งถัดไปจากซ้ายไปขวาทีละแท่งตามเวลาจริง (ไม่ใช่เลื่อนหน้าต่างแบบ VU-meter ทั่วไป)
+    // เพื่อให้ตำแหน่งแท่งซ้าย-ขวาตรงกับกราฟเงาต้นฉบับด้านหลังเป๊ะๆ เทียบกันได้ทันทีระหว่างอัด
+    let nextIndex = 0;
     function pushLive(value) {
-      liveValues.shift();
-      liveValues.push(clamp01(value));
-      for (let i = 0; i < barCount; i++) {
-        liveBars[i].style.height = (4 + liveValues[i] * 96) + '%';
-        liveBars[i].classList.remove('pending');
-      }
+      if (nextIndex >= barCount) return; // อัดครบตามความยาวกราฟแล้ว ไม่ต้องเติมต่อ
+      liveBars[nextIndex].style.height = (4 + clamp01(value) * 96) + '%';
+      liveBars[nextIndex].classList.remove('pending');
+      nextIndex++;
     }
     function resetLiveValues() {
-      liveValues = new Array(barCount).fill(0);
+      nextIndex = 0;
       reset();
     }
 

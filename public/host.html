@@ -48,15 +48,25 @@
     </div>
 
     <div class="card col">
-      <h3>คลังเสียง</h3>
+      <div class="row between" style="align-items:center;">
+        <h3 style="margin-bottom:0;">คลังเสียง</h3>
+        <span class="small muted" id="selectedCountText">เลือกไว้ 0 เสียง</span>
+      </div>
       <div class="tabs">
-        <button class="tab-btn active" data-tab="local">📁 ไฟล์ในเครื่อง (assets/sounds)</button>
-        <button class="tab-btn" data-tab="myinstants">🔗 จาก myinstants.com</button>
+        <button class="tab-btn active" data-tab="local">📁 ไฟล์ในเครื่อง <span class="tab-count" id="tabCountLocal"></span></button>
+        <button class="tab-btn" data-tab="myinstants">🔗 จาก myinstants.com <span class="tab-count" id="tabCountMyinstants"></span></button>
       </div>
       <div id="tab-local" class="col">
+        <div id="soundDropzone" class="sound-dropzone" tabindex="0" role="button" aria-label="ลากไฟล์เสียงมาวางที่นี่ หรือคลิกเพื่อเลือกไฟล์">
+          <div class="sound-dropzone-icon">🎵</div>
+          <div class="sound-dropzone-text">ลากไฟล์เสียงมาวางที่นี่ หรือ <span class="sound-dropzone-link">คลิกเพื่อเลือกไฟล์</span></div>
+          <div class="small muted">รองรับ .mp3 .wav .ogg .m4a .webm .flac</div>
+        </div>
+        <input type="file" id="soundFileInput" accept="audio/*,.mp3,.wav,.ogg,.m4a,.webm,.flac" multiple class="hidden">
+        <div id="uploadStatus" class="small hidden"></div>
         <div class="row between">
-          <span class="small muted">วางไฟล์เสียงเพิ่มในโฟลเดอร์ assets/sounds แล้วกดรีเฟรช</span>
-          <button class="btn ghost" id="refreshLibraryBtn">🔄 รีเฟรชคลังเสียง</button>
+          <span class="small muted">หรือวางไฟล์เองในโฟลเดอร์ assets/sounds แล้วกดรีเฟรช</span>
+          <button class="btn ghost small" id="refreshLibraryBtn">🔄 รีเฟรช</button>
         </div>
       </div>
       <div id="tab-myinstants" class="col hidden">
@@ -66,6 +76,14 @@
         </div>
         <div id="myinstantsStatus" class="small muted"></div>
         <p class="small muted">เปิดเว็บ <a href="https://www.myinstants.com/en/categories/memes/th/" target="_blank">myinstants.com/categories/memes/th</a> เพื่อหาเสียงมีมไทย แล้วคัดลอกลิงก์หน้าเสียงมาวาง</p>
+      </div>
+
+      <div class="sound-toolbar row between">
+        <input type="text" id="soundSearchInput" class="grow" placeholder="🔍 ค้นหาชื่อเสียง...">
+        <div class="row" style="gap:6px;">
+          <button type="button" class="btn ghost small" id="selectAllBtn">เลือกทั้งหมด</button>
+          <button type="button" class="btn ghost small" id="clearSelectionBtn">ล้างการเลือก</button>
+        </div>
       </div>
       <div class="sound-list" id="soundList"></div>
     </div>

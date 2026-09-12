@@ -97,6 +97,91 @@ function sanitizeFilename(name) {
 }
 
 /**
+ * บันทึกไฟล์เสียงที่โฮสต์ลาก-วาง (หรือเลือกจาก dialog เลือกไฟล์) ลงโฟลเดอร์ assets/sounds โดยตรง
+ * เหมือนเป็นการ "ก็อปไฟล์ลง assets/sounds แล้วรีเฟรช" ให้อัตโนมัติในขั้นตอนเดียว
+ */
+async function addLocalFile(originalName, buffer) {
+  const ext = path.extname(originalName || '').toLowerCase();
+  if (!AUDIO_EXT.has(ext)) {
+    throw new Error(`ไม่รองรับไฟล์นามสกุล "${ext || '(ไม่ทราบ)'}" — รองรับเฉพาะ ${[...AUDIO_EXT].join(', ')}`);
+  }
+  if (!buffer || buffer.length === 0) {
+    throw new Error('ไฟล์ว่างเปล่าหรืออ่านไม่สำเร็จ');
+  }
+
+  const baseName = sanitizeFilename(path.basename(originalName, ext));
+  let filePath = path.join(LOCAL_SOUNDS_DIR, `${baseName}${ext}`);
+  let counter = 1;
+  while (fs.existsSync(filePath)) {
+    filePath = path.join(LOCAL_SOUNDS_DIR, `${baseName}_${counter}${ext}`);
+    counter++;
+  }
+  fs.writeFileSync(filePath, buffer);
+
+  let sig;
+  try {
+    sig = await analyzeFile(filePath);
+  } catch (err) {
+    try { fs.unlinkSync(filePath); } catch { /* เพิกเฉย */ }
+    throw new Error('วิเคราะห์ไฟล์เสียงไม่สำเร็จ (ไฟล์อาจเสียหรือไม่ใช่ไฟล์เสียงจริง): ' + err.message);
+  }
+
+  const id = idFor(filePath);
+  const entry = {
+    id,
+    name: baseName,
+    source: 'local',
+    relPath: path.relative(ROOT, filePath),
+    mtimeMs: fs.statSync(filePath).mtimeMs,
+    durationMs: sig.durationMs,
+    envelope: sig.envelope,
+    onsets: sig.onsets,
+    pitch: sig.pitch,
+    voicedRatio: sig.voicedRatio,
+    addedAt: Date.now(),
+  };
+  libraryMeta[id] = entry;
+  saveLibraryMeta(libraryMeta);
+  return entry;
+}
+
+// รวม header ให้เหมือนเบราว์เซอร์จริงที่สุดเท่าที่ทำได้ (ไม่ใส่ br เพราะบางเวอร์ชัน axios/Node ถอด brotli ไม่ได้)
+function buildBrowserHeaders(referer, cookie) {
+  const h = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9,th;q=0.8',
+    'Accept-Encoding': 'gzip, deflate',
+    'sec-ch-ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"Windows"',
+    'Upgrade-Insecure-Requests': '1',
+    Referer: referer,
+  };
+  if (cookie) h.Cookie = cookie;
+  return h;
+}
+
+// เข้าหน้าแรกของเว็บก่อน 1 ครั้งเพื่อขอ cookie เซสชันมาแนบไปกับ request ถัดไป
+// (บางเว็บ/CDN บล็อก request ที่ "โผล่มาโหลดไฟล์ตรงๆ" แบบไม่เคยมี cookie ของเว็บมาก่อน — ตอบ 403 กลับมาเฉยๆ)
+async function warmUpCookie() {
+  try {
+    const resp = await axios.get('https://www.myinstants.com/', {
+      headers: buildBrowserHeaders('https://www.myinstants.com/'),
+      timeout: 15000,
+      validateStatus: () => true,
+    });
+    const setCookie = resp.headers['set-cookie'];
+    if (setCookie && setCookie.length) {
+      return setCookie.map((c) => c.split(';')[0]).join('; ');
+    }
+  } catch {
+    // เข้าหน้าแรกไม่ได้ก็ไม่เป็นไร ลองยิงต่อแบบไม่มี cookie
+  }
+  return null;
+}
+
+/**
  * รับลิงก์จาก myinstants.com (หน้า instant หรือลิงก์ mp3 ตรง) แล้วดาวน์โหลดมาเก็บในคลัง
  */
 async function addFromMyInstants(url) {
@@ -112,19 +197,15 @@ async function addFromMyInstants(url) {
 
   let mp3Url;
   let title = null;
+  let mp3Referer = 'https://www.myinstants.com/';
 
-  const browserHeaders = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    'Accept-Language': 'en-US,en;q=0.9,th;q=0.8',
-    Referer: 'https://www.myinstants.com/',
-  };
+  const cookie = await warmUpCookie();
 
   if (/\.mp3(\?.*)?$/i.test(pageUrl.pathname)) {
     mp3Url = pageUrl.toString();
   } else {
     const { data: html } = await axios.get(pageUrl.toString(), {
-      headers: browserHeaders,
+      headers: buildBrowserHeaders('https://www.myinstants.com/', cookie),
       timeout: 15000,
     });
     const mp3Match = html.match(/(?:https?:\/\/[^"'()\s]*)?\/?media\/sounds\/[^"'()\s]+\.mp3/i);
@@ -133,6 +214,7 @@ async function addFromMyInstants(url) {
     }
     const rawPath = mp3Match[0].replace(/^https?:\/\/[^/]+/i, '');
     mp3Url = `https://www.myinstants.com${rawPath.startsWith('/') ? '' : '/'}${rawPath}`;
+    mp3Referer = pageUrl.toString(); // ใช้หน้า instant จริงเป็น referer ตอนโหลด mp3 เหมือนคลิกเล่นจากหน้านั้นจริงๆ
 
     const titleMatch = html.match(/<h1[^>]*>([^<]+)<\/h1>/i) || html.match(/<title>([^<]+)<\/title>/i);
     if (titleMatch) {
@@ -140,11 +222,23 @@ async function addFromMyInstants(url) {
     }
   }
 
-  const resp = await axios.get(mp3Url, {
-    responseType: 'arraybuffer',
-    headers: browserHeaders,
-    timeout: 20000,
-  });
+  let resp;
+  try {
+    resp = await axios.get(mp3Url, {
+      responseType: 'arraybuffer',
+      headers: buildBrowserHeaders(mp3Referer, cookie),
+      timeout: 20000,
+    });
+  } catch (err) {
+    const status = err.response?.status;
+    if (status === 403 || status === 401) {
+      throw new Error(
+        `myinstants.com บล็อกการดาวน์โหลดอัตโนมัติตอนนี้ (HTTP ${status}) — เว็บอาจมีระบบกันบอทที่ผ่านทาง server ไม่ได้ ` +
+        `วิธีแก้ชั่วคราว: เปิดลิงก์เสียงในเบราว์เซอร์ปกติ กด "ดาวน์โหลด/บันทึกไฟล์เสียง" แล้วเอาไฟล์ .mp3 ไปวางในโฟลเดอร์ assets/sounds ของเกมแทน จากนั้นกด "รีเฟรชคลังเสียง" ในหน้า host`
+      );
+    }
+    throw err;
+  }
 
   const baseName = sanitizeFilename(title || path.basename(mp3Url, '.mp3'));
   let filePath = path.join(CACHE_SOUNDS_DIR, `${baseName}.mp3`);
@@ -207,6 +301,7 @@ function absolutePathFor(entry) {
 module.exports = {
   scanAndSync,
   addFromMyInstants,
+  addLocalFile,
   getAll,
   getById,
   removeById,
